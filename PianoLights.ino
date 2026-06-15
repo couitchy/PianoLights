@@ -1,6 +1,6 @@
 /*
  * ==================================================================================================
- *  PianoLights.ino, bridge BLE/MIDI entre Synthesia et un ruban lumineux
+ *  PianoLights.ino, bridge BLE/MIDI entre Synthesia et un ruban LED
  * ==================================================================================================
  *  Cible      : ESP32 WROOM ("ESP32 Dev Module")
  *  Rôle       : Périphérique BLE MIDI (vu comme sortie MIDI par Synthesia sous Windows)
@@ -16,7 +16,7 @@
  *    - ESP Async WebServer (ESP32Async)
  *    - Async TCP           (ESP32Async)
  *
- *  Partition Scheme : "Huge APP"
+ *  Partition Scheme : "Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)"
  * ==================================================================================================
  */
 
@@ -38,16 +38,16 @@
 // Constantes
 // ----------
 #define FW_VERSION              "1.0"
-#define BLE_DEVICE_NAME         "Piano-Lights"      // nom visible sous Windows
-#define AP_SSID                 "Piano-Lights-AP"   // SSID du mode AP
-#define MDNS_HOSTNAME           "pianolights"       // accès via http://pianolights.local
-#define MAX_LEDS                300                 // buffer max alloué
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
+#define WIFI_AP_SSID            "Piano-Lights-AP"   // SSID du mode AP
+#define MDNS_HOSTNAME           "pianolights"       // accès via http://pianolights.local
+#define BLE_DEVICE_NAME         "Piano-Lights"      // nom visible sous Windows
+#define LED_MAX_COUNT           300                 // buffer max alloué
 #define LED_FRAME_INTERVAL_MS   15                  // ~60 fps max
 
-// Pins autorisées pour le ruban lumineux (on exclut les pins de strapping, flash et input-only)
-static const uint8_t LED_PIN_WHITELIST[] = {4, 5, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+// Pins autorisées pour le ruban lumineux (on exclut notamment les pins de strapping, flash et input-only)
+static const uint8_t LED_PIN_WHITELIST[] = {16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
 
 // -----------
 // Préférences
@@ -56,7 +56,7 @@ struct Config {
   // Géométrie
   uint8_t  keyCount    = 88;       // nombre de touches du clavier
   uint8_t  firstNote   = 21;       // note MIDI de la 1ère touche (21 = A0)
-  float    ledsPerNote = 2.0f;     // ratio LEDs/touche (flottant, affinable)
+  float    ledsPerKey  = 2.0f;     // ratio LEDs/touche (flottant, affinable)
   int16_t  ledOffset   = 0;        // index de la 1ère LED utile
   bool     reversed    = false;    // sens du ruban
   uint8_t  ledPin      = 16;       // GPIO data (redémarrage requis)
@@ -80,7 +80,7 @@ Preferences  prefs;
 // -----------
 BLEMIDI_CREATE_INSTANCE(BLE_DEVICE_NAME, MIDI)
 
-CRGB              leds[MAX_LEDS];
+CRGB              leds[LED_MAX_COUNT];
 AsyncWebServer    server(80);
 
 volatile uint8_t  noteChan[128] = {0};    // 0 = éteinte, sinon canal MIDI 1-16
@@ -92,14 +92,14 @@ uint32_t  rebootAt      = 0;              // != 0 -> redémarrage planifié
 uint32_t  lastWifiRetry = 0;
 uint32_t  lastShow      = 0;
 
-// ---------------
-// Persistance NVS
-// ---------------
+// --------------
+// Stockage (NVS)
+// --------------
 void loadConfig() {
   prefs.begin("pianolights", true);
   cfg.keyCount    = prefs.getUChar("kc",   cfg.keyCount);
   cfg.firstNote   = prefs.getUChar("fn",   cfg.firstNote);
-  cfg.ledsPerNote = prefs.getFloat("lpn",  cfg.ledsPerNote);
+  cfg.ledsPerKey  = prefs.getFloat("lpn",  cfg.ledsPerKey);
   cfg.ledOffset   = prefs.getShort("off",  cfg.ledOffset);
   cfg.reversed    = prefs.getBool("rev",   cfg.reversed);
   cfg.ledPin      = prefs.getUChar("pin",  cfg.ledPin);
@@ -118,7 +118,7 @@ void saveConfig() {
   prefs.begin("pianolights", false);
   prefs.putUChar("kc",    cfg.keyCount);
   prefs.putUChar("fn",    cfg.firstNote);
-  prefs.putFloat("lpn",   cfg.ledsPerNote);
+  prefs.putFloat("lpn",   cfg.ledsPerKey);
   prefs.putShort("off",   cfg.ledOffset);
   prefs.putBool ("rev",   cfg.reversed);
   prefs.putUChar("pin",   cfg.ledPin);
@@ -144,16 +144,15 @@ bool isValidLedPin(uint8_t pin) {
 }
 
 uint16_t activeNumLeds() {
-  long n = lroundf(cfg.keyCount * cfg.ledsPerNote) + max((int16_t)0, cfg.ledOffset);
-  return (uint16_t)constrain(n, 1L, (long)MAX_LEDS);
+  long n = lroundf(cfg.keyCount * cfg.ledsPerKey) + max((int16_t)0, cfg.ledOffset);
+  return (uint16_t)constrain(n, 1L, (long)LED_MAX_COUNT);
 }
 
 // FastLED a besoin d'avoir la pin figée dès la compilation : on instancie donc chaque pin potentielle et on sélectionne au boot
-#define LED_PIN_CASE(p) case p: FastLED.addLeds<WS2812B, p, GRB>(leds, MAX_LEDS); break;
+#define LED_PIN_CASE(p) case p: FastLED.addLeds<WS2812B, p, GRB>(leds, LED_MAX_COUNT); break;
 void setupLeds() {
   if (!isValidLedPin(cfg.ledPin)) cfg.ledPin = 16;
   switch (cfg.ledPin) {
-    LED_PIN_CASE(4)  LED_PIN_CASE(5)  LED_PIN_CASE(13) LED_PIN_CASE(14)
     LED_PIN_CASE(16) LED_PIN_CASE(17) LED_PIN_CASE(18) LED_PIN_CASE(19)
     LED_PIN_CASE(21) LED_PIN_CASE(22) LED_PIN_CASE(23) LED_PIN_CASE(25)
     LED_PIN_CASE(26) LED_PIN_CASE(27) LED_PIN_CASE(32) LED_PIN_CASE(33)
@@ -169,10 +168,10 @@ CRGB colorForChannel(uint8_t ch) {
   return CRGB(cfg.colorOther);
 }
 
-// Reconstruit l'image complète du ruban depuis l'état des notes
+// Synchronise l'état du ruban avec celui des notes
 void renderLeds() {
   const uint16_t n = activeNumLeds();
-  fill_solid(leds, MAX_LEDS, CRGB::Black);
+  fill_solid(leds, LED_MAX_COUNT, CRGB::Black);
 
   const int lastNote = min(127, cfg.firstNote + cfg.keyCount - 1);
   for (int note = cfg.firstNote; note <= lastNote; note++) {
@@ -180,8 +179,8 @@ void renderLeds() {
     if (!ch) continue;
 
     const int   idx   = note - cfg.firstNote;
-    int         start = (int)lroundf(idx * cfg.ledsPerNote);
-    int         end   = (int)lroundf((idx + 1) * cfg.ledsPerNote);
+    int         start = (int)lroundf(idx * cfg.ledsPerKey);
+    int         end   = (int)lroundf((idx + 1) * cfg.ledsPerKey);
     if (end <= start) end = start + 1;  // au moins 1 LED par touche
 
     const CRGB c = colorForChannel(ch);
@@ -195,12 +194,26 @@ void renderLeds() {
 }
 
 void bootAnimation() {
-  fill_solid(leds, MAX_LEDS, CRGB::Black);
-  for (int i = 0; i < 5 && i < MAX_LEDS; i++)
-    leds[i] = CRGB(0xFFB648);
-  FastLED.show();
-  delay(400);
-  fill_solid(leds, MAX_LEDS, CRGB::Black);
+  const int n = min((int)lroundf(cfg.keyCount * cfg.ledsPerKey), LED_MAX_COUNT);
+  fill_solid(leds, LED_MAX_COUNT, CRGB::Black);
+
+  for (int h = 0; h < n; h++) {
+    fadeToBlackBy(leds, n, 64);
+    if (h < n) {
+      uint8_t hue = map(h, 0, n, 160, 0);
+      leds[h] = CHSV(hue, 255, 255);
+    }
+    FastLED.show();
+    delay(10);
+  }
+
+  for (int f = 0; f < 16; f++) {
+    fadeToBlackBy(leds, n, 40);
+    FastLED.show();
+    delay(12);
+  }
+
+  fill_solid(leds, LED_MAX_COUNT, CRGB::Black);
   FastLED.show();
 }
 
@@ -244,9 +257,9 @@ void setupBleMidi() {
 // ------------
 void startAccessPoint() {
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID);            // AP ouvert (pour la configuration)
+  WiFi.softAP(WIFI_AP_SSID);       // AP ouvert (pour la configuration)
   apMode = true;
-  Serial.printf("[WiFi] Mode AP — SSID \"%s\", IP %s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
+  Serial.printf("[WiFi] Mode AP — SSID \"%s\", IP %s\n", WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
 }
 
 void setupWifi() {
@@ -311,7 +324,7 @@ void sendConfigJson(AsyncWebServerRequest *req) {
   JsonDocument doc;
   doc["keyCount"]    = cfg.keyCount;
   doc["firstNote"]   = cfg.firstNote;
-  doc["ledsPerNote"] = serialized(String(cfg.ledsPerNote, 3));
+  doc["ledsPerKey"]  = serialized(String(cfg.ledsPerKey, 3));
   doc["ledOffset"]   = cfg.ledOffset;
   doc["reversed"]    = cfg.reversed;
   doc["ledPin"]      = cfg.ledPin;
@@ -346,7 +359,7 @@ void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
   if (o["colorOther"].is<const char*>())  cfg.colorOther  = hexToColor(o["colorOther"]);
   if (o["keyCount"].is<int>())            cfg.keyCount    = constrain((int)o["keyCount"], 1, 108);
   if (o["firstNote"].is<int>())           cfg.firstNote   = constrain((int)o["firstNote"], 0, 120);
-  if (o["ledsPerNote"].is<float>())       cfg.ledsPerNote = constrain((float)o["ledsPerNote"], 0.1f, 10.0f);
+  if (o["ledsPerKey"].is<float>())        cfg.ledsPerKey  = constrain((float)o["ledsPerKey"], 0.1f, 10.0f);
   if (o["ledOffset"].is<int>())           cfg.ledOffset   = constrain((int)o["ledOffset"], -50, 100);
   if (o["chLeft"].is<int>())              cfg.chLeft      = constrain((int)o["chLeft"], 1, 16);
   if (o["chRight"].is<int>())             cfg.chRight     = constrain((int)o["chRight"], 1, 16);

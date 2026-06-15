@@ -1,4 +1,4 @@
-# Piano Lights, bridge BLE/MIDI entre Synthesia et un ruban lumineux
+# Piano Lights, bridge BLE/MIDI entre Synthesia et un ruban LED
 
 Firmware Arduino pour ESP32 WROOM : périphérique **BLE MIDI** reconnu par
 Windows et utilisable comme **sortie MIDI dans Synthesia** (fonction key
@@ -12,20 +12,36 @@ embarquée** (WiFi STA avec repli AP automatique).
    (Gestionnaire de cartes).
 2. Installer via le Gestionnaire de bibliothèques :
    - **MIDI Library**        (Francois Best)
-   - **BLE-MIDI**            (lathoub, mais à remplacer)
+   - **BLE-MIDI**            (lathoub, mais à remplacer après)
    - **NimBLE-Arduino**      (h2zero)
    - **FastLED**             (Daniel Garcia)
    - **ArduinoJson**         (Benoit Blanchon)
    - **ESP Async WebServer** (ESP32Async)
    - **Async TCP**           (ESP32Async)
-3. Sélectionner la carte **ESP32 Dev Module** et surtout :
-   **Tools → Partition Scheme → **"Huge APP (3MB)"**.
-   Avec BLE + WiFi, le binaire dépasse la partition app par défaut.
+3. Sélectionner la carte **ESP32 Dev Module** et surtout dans **Tools** :
+   **Partition Scheme → "Minimal SPIFFS (1.9MB APP with OTA/128KB SPIFFS)"**.
+   En effet, avec BLE + WiFi, le binaire dépasse la partition app par défaut.
 4. Ouvrir `PianoLights.ino` (le fichier `PianoLights.h` doit être dans
    le même dossier, il apparaîtra comme second onglet) et téléverser.
 
-> **Note de compatibilité NimBLE** :
-> `BLE-MIDI` doit être récupéré depuis le GitHub officiel.
+> **Remplacement de la bibliothèque BLE-MIDI** :
+> La version de `BLE-MIDI` (lathoub) distribuée par le gestionnaire n'est pas
+> compatible en l'état avec NimBLE tel qu'utilisé ici (le correctif porte sur
+> `src/hardware/BLEMIDI_ESP32_NimBLE.h`). Une version déjà corrigée est fournie
+> avec le projet dans `libraries/BLE-MIDI.zip`. Pour l'installer :
+>
+> 1. Fermer Arduino IDE.
+> 2. Décompresser `libraries/BLE-MIDI.zip` (du dossier du projet) : l'archive
+>    contient un dossier `BLE-MIDI/`.
+> 3. Remplacer **intégralement** le contenu du dossier
+>    `C:\Users\%USERNAME%\Documents\Arduino\libraries\BLE-MIDI`
+>    par le contenu de cette archive. Concrètement : supprimer l'éventuel
+>    dossier `BLE-MIDI` existant (s'il a été installé par le gestionnaire),
+>    puis copier le dossier `BLE-MIDI/` issu de l'archive à sa place, de sorte
+>    d'obtenir `...\Arduino\libraries\BLE-MIDI\src\hardware\BLEMIDI_ESP32_NimBLE.h`.
+>    On remplace tout le dossier (et pas seulement ce fichier) pour éviter tout
+>    mélange de versions.
+> 4. Rouvrir Arduino IDE : la bibliothèque corrigée est alors prise en compte.
 
 ## 2. Première mise en route
 
@@ -53,18 +69,16 @@ embarquée** (WiFi STA avec repli AP automatique).
 
 ## 4. Calibration
 
-Dans la section Calibration de la page web :
+Dans la section Alignement de la page web :
 
-- Choisir un **préréglage de densité** (60/72/96/144 LEDs/m) qui préremplit
-  « LEDs par touche », puis affiner ce ratio **en flottant** : si
-  l'alignement dérive progressivement le long du clavier, ajustez de
+- Choisir un **preset de densité** (60 / 96 / 120 / 144 / 240 / 332 LEDs/m)
+  qui préremplit « LED par touche », puis affiner ce ratio **en décimal** : si
+  l'alignement dérive progressivement le long du clavier, ajuster de
   ±0,01–0,05.
-- **Décalage** : aligne la première LED sur la première touche.
-- **Inversé** : si le ruban est posé data à droite.
-- Cliquer les touches du **clavier virtuel** allume réellement les LEDs ;
-  l'aperçu du ruban au-dessus du clavier montre l'image *attendue* — il
-  suffit de comparer avec le ruban physique et d'ajuster jusqu'à
-  correspondance. « Enregistrer les réglages » persiste le tout en flash.
+- **Offset** : aligne la première LED sur la première touche.
+- **Inversé** : si le ruban est posé avec son câble du côté droit.
+- Cliquer sur les touches du **clavier virtuel** allume réellement les LEDs.
+« Enregistrer les préférences » sauvegarde le tout en flash.
 
 ## 5. Architecture
 

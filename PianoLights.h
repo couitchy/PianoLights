@@ -1,6 +1,6 @@
 /*
  * PianoLights.h, interface de configuration pour Piano Lights, embarquée en PROGMEM
- * Page autonome (aucune ressource externe : fonctionne aussi en mode AP, sans accès Internet)
+ * Page autonome (SPA)
  */
 #pragma once
 #include <pgmspace.h>
@@ -115,6 +115,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             border-radius: 6px;
             padding: 7px 9px;
             font: inherit;
+        }
+
+        #ledPin {
+            max-width: 370px;
         }
 
         input:focus,
@@ -266,23 +270,23 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <header>
     <h1>Piano<b>Lights</b></h1>
     <div id="chips">
-        <span class="chip" id="chipWifi">WiFi…</span>
-        <span class="chip" id="chipBle">BLE…</span>
+        <span class="chip" id="chipWifi">WiFi...</span>
+        <span class="chip" id="chipBle">BLE...</span>
         <span class="chip" id="chipLeds">— LEDs</span>
     </div>
 </header>
 
 <main>
 <section>
-    <h2>Calibration</h2>
-    <div id="strip" title="Aperçu du ruban (image attendue)"></div>
+    <h2>Alignement</h2>
+    <div id="strip"></div>
     <div id="kb"></div>
-    <div id="mapinfo">Cliquez sur une touche pour l'allumer sur le ruban et comparer avec l'aperçu ci-dessus.</div>
+    <div id="mapinfo">Cliquer sur une touche pour l'allumer.</div>
     <div class="row" style="margin:10px 0 16px">
-        <span class="note">Tester comme :</span>
-        <label style="display:inline;margin:0"><input type="radio" name="hand" value="L" checked> Main gauche</label>
-        <label style="display:inline;margin:0"><input type="radio" name="hand" value="R"> Main droite</label>
-        <label style="display:inline;margin:0"><input type="radio" name="hand" value="O"> Autre canal</label>
+        <span class="note">Allumer selon :</span>
+        <label style="display:inline;margin:0"><input type="radio" name="hand" value="L" checked> Canal main gauche</label>
+        <label style="display:inline;margin:0"><input type="radio" name="hand" value="R"> Canal main droite</label>
+        <label style="display:inline;margin:0"><input type="radio" name="hand" value="O"> Canal autre</label>
         <button onclick="allOff()">Tout éteindre</button>
     </div>
     <div class="grid">
@@ -295,25 +299,26 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             <input id="firstNote" type="number" min="0" max="120" onchange="rebuild()">
         </div>
         <div>
-            <label for="ledsPerNote">LEDs par touche</label>
-            <input id="ledsPerNote" type="number" min="0.1" max="10" step="0.001" onchange="rebuild()">
+            <label for="ledsPerKey">LED par touche (densité)</label>
+            <input id="ledsPerKey" type="number" min="0.1" max="10" step="0.001" onchange="rebuild()">
         </div>
         <div>
-            <label for="ledOffset">Décalage (1<sup>re</sup> LED)</label>
+            <label for="ledOffset">Première LED (offset)</label>
             <input id="ledOffset" type="number" min="-50" max="100" onchange="rebuild()">
         </div>
         <div>
-            <label for="reversed">Sens du ruban</label>
-            <label style="display:flex;gap:8px;align-items:center;margin-top:8px;color:var(--txt)"><input id="reversed" type="checkbox" onchange="rebuild()"> Inversé</label>
+            <label for="reversed">Sens du ruban LED</label>
+            <label style="display:flex;gap:8px;align-items:center;margin-top:12px;color:var(--txt)"><input id="reversed" type="checkbox" onchange="rebuild()"> Inversé</label>
         </div>
     </div>
     <div class="row" style="margin-top:12px">
-        <span class="note">Préréglage densité :</span>
+        <span class="note">Preset de densité :</span>
         <button onclick="density(60)">60/m</button>
-        <button onclick="density(72)">72/m</button>
         <button onclick="density(96)">96/m</button>
+        <button onclick="density(120)">120/m</button>
         <button onclick="density(144)">144/m</button>
-        <span class="note">(préremplit « LEDs par touche », à affiner ensuite)</span>
+        <button onclick="density(240)">240/m</button>
+        <button onclick="density(332)">332/m</button>
     </div>
 </section>
 
@@ -329,27 +334,27 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             <div class="row"><input id="colorRight" type="color" onchange="paintAll()"><span class="note">canal</span><input id="chRight" type="number" min="1" max="16" style="width:64px"></div>
         </div>
         <div>
-            <label for="colorOther">Autres canaux</label>
+            <label for="colorOther">Autre</label>
             <div class="row"><input id="colorOther" type="color" onchange="paintAll()"></div>
         </div>
         <div>
-            <label for="brightness">Luminosité globale (<span id="briVal">—</span>)</label>
+            <label for="brightness">Luminosité (<span id="briVal">—</span>)</label>
             <input id="brightness" type="range" min="5" max="255" oninput="briVal.textContent=this.value">
         </div>
     </div>
-    <p class="note" style="margin-bottom:0">Les numéros de canaux doivent correspondre à ceux configurés dans Synthesia (séparation des mains).</p>
+    <p class="note" style="margin-bottom:0">Les numéros de canaux correspondent à ceux transmis par Synthesia.</p>
 </section>
 
 <section>
     <h2>Matériel</h2>
     <div class="grid">
         <div>
-            <label for="ledPin">GPIO data du ruban</label>
+            <label for="ledPin">GPIO auquel le ruban LED est connecté</label>
             <select id="ledPin"></select>
         </div>
-        <div style="align-self:end"><button onclick="reboot()">Redémarrer l'ESP32</button></div>
+        <div id="reboot" style="align-self:end" hidden><button onclick="reboot()">Redémarrer</button></div>
     </div>
-    <p class="note" style="margin-bottom:0">Le changement de GPIO est enregistré immédiatement mais prend effet après redémarrage.</p>
+    <p class="note" style="margin-bottom:0">Le changement de GPIO nécessite un redémarrage.</p>
 </section>
 
 <section>
@@ -363,20 +368,20 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             <label for="pass">Mot de passe</label>
             <input id="pass" type="password" autocomplete="off">
         </div>
-        <div style="align-self:end"><button onclick="saveWifi()">Enregistrer le WiFi et redémarrer</button></div>
+        <div style="align-self:end"><button onclick="saveWifi()">Enregistrer et redémarrer</button></div>
     </div>
-    <p class="note" style="margin-bottom:0">Si la connexion échoue au démarrage, l'ESP32 ouvre le point d'accès « Piano-Lights » (page sur http://192.168.4.1). Sinon : http://pianolights.local</p>
+    <p class="note" style="margin-bottom:0">En cas d'échec de connexion au démarrage, un point d'accès « Piano-Lights-AP » hébergera cette page sur <a href="http://pianolights.local" target="_blank" rel="noopener">http://pianolights.local</a> ou <a href="http://192.168.4.1" target="_blank" rel="noopener">http://192.168.4.1</a>.</p>
 </section>
 </main>
 
 <footer>
-    <button class="primary" onclick="save()">Enregistrer les réglages</button>
+    <button class="primary" onclick="save()">Enregistrer les préférences</button>
     <span id="msg"></span>
 </footer>
 
 <script>
 const $ = i => document.getElementById(i);
-const PINS = [4, 5, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+const PINS = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
 const BLACK = [1, 3, 6, 8, 10];
 const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 let on = {};           // note MIDI -> canal (état local des tests)
@@ -389,7 +394,7 @@ function geo() {
     return {
         keyCount: +$('keyCount').value || 88,
         firstNote: +$('firstNote').value || 21,
-        ledsPerNote: +$('ledsPerNote').value || 2,
+        ledsPerKey: +$('ledsPerKey').value || 2,
         ledOffset: +$('ledOffset').value || 0,
         reversed: $('reversed').checked
     };
@@ -400,12 +405,12 @@ function noteName(n) {
 }
 
 function numLeds(g) {
-    return Math.min(300, Math.max(1, Math.round(g.keyCount * g.ledsPerNote) + Math.max(0, g.ledOffset)));
+    return Math.min(300, Math.max(1, Math.round(g.keyCount * g.ledsPerKey) + Math.max(0, g.ledOffset)));
 }
 
 function mapNote(n, g) {
     const i = n - g.firstNote, N = numLeds(g);
-    let s = Math.round(i * g.ledsPerNote), e = Math.round((i + 1) * g.ledsPerNote);
+    let s = Math.round(i * g.ledsPerKey), e = Math.round((i + 1) * g.ledsPerKey);
     if (e <= s) e = s + 1;
     const r = [];
     for (let k = s; k < e; k++) {
@@ -479,7 +484,7 @@ function rebuild() {
 }
 
 function density(d) {
-    $('ledsPerNote').value = (d * 0.164 / 12).toFixed(3);
+    $('ledsPerKey').value = (d * 0.164 / 12).toFixed(3);
     rebuild();
 }
 
@@ -522,7 +527,8 @@ async function save() {
     };
     try {
         const r = await api('/api/config', body);
-        msg(r.needsReboot ? 'Enregistré — redémarrez pour appliquer le nouveau GPIO' : 'Réglages enregistrés');
+        if (r.needsReboot) $('reboot').hidden = false;
+        msg(r.needsReboot ? 'Préférences enregistrées — Redémarrage nécessaire' : 'Préférences enregistrées');
     } catch (e) {
         msg('Erreur réseau');
     }
@@ -532,9 +538,9 @@ async function saveWifi() {
     if (!$('ssid').value) return msg('SSID vide');
     try {
         await api('/api/wifi', { ssid: $('ssid').value, pass: $('pass').value });
-        msg("Enregistré — l'ESP32 redémarre…");
+        msg("Enregistré — Redémarrage...");
     } catch (e) {
-        msg("L'ESP32 redémarre…");
+        msg("Redémarrage...");
     }
 }
 
@@ -542,7 +548,7 @@ async function reboot() {
     try {
         await api('/api/reboot', {});
     } catch (e) {}
-    msg("Redémarrage…");
+    msg("Redémarrage...");
 }
 
 function status(s) {
@@ -565,7 +571,7 @@ async function load() {
         const c = await api('/api/config');
         $('keyCount').value = c.keyCount;
         $('firstNote').value = c.firstNote;
-        $('ledsPerNote').value = c.ledsPerNote;
+        $('ledsPerKey').value = c.ledsPerKey;
         $('ledOffset').value = c.ledOffset;
         $('reversed').checked = c.reversed;
         sel.value = c.ledPin;
