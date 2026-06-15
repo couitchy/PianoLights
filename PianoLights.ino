@@ -28,6 +28,7 @@
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncJson.h>
+#include <Update.h>
 
 #include <BLEMIDI_Transport.h>
 #include <hardware/BLEMIDI_ESP32_NimBLE.h>
@@ -37,7 +38,7 @@
 // ----------
 // Constantes
 // ----------
-#define FW_VERSION              "1.0"
+#define FW_VERSION              "1.1"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // SSID du mode AP
@@ -86,6 +87,7 @@ AsyncWebServer    server(80);
 volatile uint8_t  noteChan[128] = {0};    // 0 = éteinte, sinon canal MIDI 1-16
 volatile bool     ledsDirty     = true;
 volatile bool     bleConnected  = false;
+volatile bool     otaInProgress = false;  // fige le rendu LED pendant l'écriture dans la flash
 
 bool      apMode        = false;
 uint32_t  rebootAt      = 0;              // != 0 -> redémarrage planifié
@@ -317,6 +319,45 @@ uint32_t hexToColor(const char *s) {
   return s ? (uint32_t)strtoul(s, nullptr, 16) : 0;
 }
 
+// -------------------------
+// Gestion mise à jour (OTA)
+// -------------------------
+void handleOtaUpload(AsyncWebServerRequest *req, const String &filename, size_t index, uint8_t *data, size_t len, bool final) {
+  if (index == 0) {
+    Serial.printf("[OTA] Début : %s\n", filename.c_str());
+    otaInProgress = true;
+    fill_solid(leds, LED_MAX_COUNT, CRGB::Black);
+    FastLED.show();
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Serial.print("[OTA] ");
+      Update.printError(Serial);
+    }
+  }
+
+  if (Update.isRunning() && Update.write(data, len) != len) {
+    Serial.print("[OTA] ");
+    Update.printError(Serial);
+  }
+
+  if (final) {
+    if (Update.end(true)) {
+      Serial.printf("[OTA] Terminée : %u octets\n", (unsigned)(index + len));
+    } else {
+      Serial.print("[OTA] ");
+      Update.printError(Serial);
+    }
+  }
+}
+
+void handleOtaResult(AsyncWebServerRequest *req) {
+  const bool ok = !Update.hasError();
+  AsyncWebServerResponse *res = req->beginResponse(ok ? 200 : 500, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+  res->addHeader("Connection", "close");
+  req->send(res);
+  if (ok) rebootAt = millis() + 1500; // laisse le temps à la réponse HTTP de partir
+  otaInProgress = false;
+}
+
 // -------------------
 // Gestion serveur web
 // -------------------
@@ -426,6 +467,8 @@ void setupWebServer() {
     req->send(200, "application/json", "{\"ok\":true}");
   });
 
+  server.on("/api/update", HTTP_POST, handleOtaResult, handleOtaUpload);
+
   server.onNotFound([](AsyncWebServerRequest *req) {
     req->send(404, "text/plain", "Not found");
   });
@@ -461,7 +504,7 @@ void loop() {
   maintainWifi();
 
   // Rendu LEDs
-  if (ledsDirty && millis() - lastShow >= LED_FRAME_INTERVAL_MS) {
+  if (!otaInProgress && ledsDirty && millis() - lastShow >= LED_FRAME_INTERVAL_MS) {
     ledsDirty = false;
     renderLeds();
     FastLED.show();

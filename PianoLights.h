@@ -372,6 +372,19 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     </div>
     <p class="note" style="margin-bottom:0">En cas d'échec de connexion au démarrage, un point d'accès « Piano-Lights-AP » hébergera cette page sur <a href="http://pianolights.local" target="_blank" rel="noopener">http://pianolights.local</a> ou <a href="http://192.168.4.1" target="_blank" rel="noopener">http://192.168.4.1</a>.</p>
 </section>
+
+<section>
+    <h2>Mise à jour</h2>
+    <div class="row">
+        <input id="fw" type="file" accept=".bin">
+        <button id="fwBtn" onclick="uploadFw()">Envoyer</button>
+        <span class="note">Version actuelle : <b id="fwVer">—</b></span>
+    </div>
+    <div id="fwBar" hidden style="height:8px;background:#101016;border:1px solid var(--line);border-radius:5px;overflow:hidden;margin-top:14px">
+        <div id="fwFill" style="height:100%;width:0;background:var(--amber);transition:width .15s"></div>
+    </div>
+    <p class="note" style="margin-bottom:0">Sélectionner le fichier <code>.bin</code> à flasher. Redémarrage automatique à la fin de l'opération.</p>
+</section>
 </main>
 
 <footer>
@@ -551,12 +564,46 @@ async function reboot() {
     msg("Redémarrage...");
 }
 
+function uploadFw() {
+    const f = $('fw').files[0];
+    if (!f) return msg('Aucun fichier sélectionné');
+    if (!f.name.toLowerCase().endsWith('.bin')) return msg('Fichier .bin attendu');
+
+    const bar = $('fwBar'), fill = $('fwFill');
+    bar.hidden = false;
+    fill.style.width = '0';
+    $('fwBtn').disabled = true;
+
+    const fd = new FormData();
+    fd.append('update', f, f.name);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/update');
+    xhr.upload.onprogress = e => {
+        if (e.lengthComputable) fill.style.width = (e.loaded / e.total * 100).toFixed(1) + '%';
+    };
+    xhr.onload = () => {
+        $('fwBtn').disabled = false;
+        if (xhr.status === 200) {
+            fill.style.width = '100%';
+            msg('Mise à jour réussie — Redémarrage...');
+            setTimeout(() => location.reload(), 9000);
+        } else {
+            msg('Échec de la mise à jour');
+        }
+    };
+    xhr.onerror = () => { $('fwBtn').disabled = false; msg('Erreur réseau pendant l\'envoi'); };
+    msg('Envoi en cours...');
+    xhr.send(fd);
+}
+
 function status(s) {
     $('chipWifi').textContent = (s.mode == 'ap' ? 'AP ' : 'WiFi ') + s.ip;
     $('chipWifi').className = 'chip' + (s.mode == 'sta' ? ' on' : '');
     $('chipBle').textContent = s.ble ? 'BLE connecté' : 'BLE en attente';
     $('chipBle').className = 'chip' + (s.ble ? ' on' : '');
     $('chipLeds').textContent = s.numLeds + ' LEDs';
+    $('fwVer').textContent = 'v' + s.version;
 }
 
 async function load() {
