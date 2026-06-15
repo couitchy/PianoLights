@@ -1,0 +1,77 @@
+# Piano Lights, bridge BLE/MIDI entre Synthesia et un ruban lumineux
+
+Firmware Arduino pour ESP32 WROOM : périphérique **BLE MIDI** reconnu par
+Windows et utilisable comme **sortie MIDI dans Synthesia** (fonction key
+lights). Les notes reçues allument les LEDs correspondantes d'un ruban
+**WS2812B**. La calibration et les couleurs se règlent via une **page web
+embarquée** (WiFi STA avec repli AP automatique).
+
+## 1. Installation (Arduino IDE)
+
+1. Installer le support de carte **esp32 by Espressif Systems**
+   (Gestionnaire de cartes).
+2. Installer via le Gestionnaire de bibliothèques :
+   - **MIDI Library**        (Francois Best)
+   - **BLE-MIDI**            (lathoub, mais à remplacer)
+   - **NimBLE-Arduino**      (h2zero)
+   - **FastLED**             (Daniel Garcia)
+   - **ArduinoJson**         (Benoit Blanchon)
+   - **ESP Async WebServer** (ESP32Async)
+   - **Async TCP**           (ESP32Async)
+3. Sélectionner la carte **ESP32 Dev Module** et surtout :
+   **Tools → Partition Scheme → **"Huge APP (3MB)"**.
+   Avec BLE + WiFi, le binaire dépasse la partition app par défaut.
+4. Ouvrir `PianoLights.ino` (le fichier `PianoLights.h` doit être dans
+   le même dossier, il apparaîtra comme second onglet) et téléverser.
+
+> **Note de compatibilité NimBLE** :
+> `BLE-MIDI` doit être récupéré depuis le GitHub officiel.
+
+## 2. Première mise en route
+
+1. Au premier démarrage (aucun WiFi enregistré), l'ESP32 ouvre le point
+   d'accès **`Piano-Lights-AP`** (ouvert, sans mot de passe).
+2. S'y connecter, ouvrir **http://192.168.4.1**, renseigner le SSID/mot de
+   passe de votre box dans la section WiFi → l'ESP32 redémarre en STA.
+3. Ensuite, la page est accessible sur **http://pianolights.local** (ou via
+   l'IP affichée dans le moniteur série à 115200 bauds).
+4. En cas d'échec de connexion (mot de passe erroné, box éteinte), le mode
+   AP se réactive automatiquement après 15 s.
+
+## 3. Appairage Windows + Synthesia
+
+1. Windows : **Paramètres → Bluetooth et appareils → Ajouter un appareil →
+   Bluetooth** → appairer **Piano-Lights**. (Windows 10/11 requis : le BLE MIDI
+   passe par l'API UWP MIDI, que Synthesia utilise.)
+2. Synthesia : **Settings → Music Devices** → dans les sorties, activer
+   **Piano-Lights (MIDI OUT)** et y activer la fonction d'éclairage des touches
+   (*key lights*), en choisissant le mode qui sépare les mains par canal.
+3. Reporter les **numéros de canaux** main gauche / main droite affichés
+   par Synthesia dans la page web (section Couleurs). Par défaut le
+   firmware attend gauche = canal 1, droite = canal 2 ; tout autre canal
+   prend la troisième couleur.
+
+## 4. Calibration
+
+Dans la section Calibration de la page web :
+
+- Choisir un **préréglage de densité** (60/72/96/144 LEDs/m) qui préremplit
+  « LEDs par touche », puis affiner ce ratio **en flottant** : si
+  l'alignement dérive progressivement le long du clavier, ajustez de
+  ±0,01–0,05.
+- **Décalage** : aligne la première LED sur la première touche.
+- **Inversé** : si le ruban est posé data à droite.
+- Cliquer les touches du **clavier virtuel** allume réellement les LEDs ;
+  l'aperçu du ruban au-dessus du clavier montre l'image *attendue* — il
+  suffit de comparer avec le ruban physique et d'ajuster jusqu'à
+  correspondance. « Enregistrer les réglages » persiste le tout en flash.
+
+## 5. Architecture
+
+| Fichier        | Rôle                                                        |
+|----------------|-------------------------------------------------------------|
+| `PianoLights.ino` | BLE MIDI, mapping notes→LEDs, WiFi STA/AP, API HTTP, NVS    |
+| `PianoLights.h`   | Page de configuration (HTML/CSS/JS autonome, en PROGMEM)    |
+
+API HTTP : `GET /api/config`, `POST /api/config`, `POST /api/test`
+(`{note, on, ch}`), `POST /api/alloff`, `POST /api/wifi`, `POST /api/reboot`.
