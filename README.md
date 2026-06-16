@@ -61,17 +61,19 @@ embarquée** (WiFi STA avec repli AP automatique).
    passe par l'API UWP / WinRT MIDI.)
 2. Activer la prise en charge de WinRT pour que Synthesia voie le bridge BLE/MIDI :
    - maintenir la touche **Shift** enfoncée pendant le lancement de
-     **Synthesia** pour ouvrir la fenêtre de configuration ;
+     **Synthesia** pour ouvrir la fenêtre de configuration
    - dans la liste déroulante **Setting**, chercher
-     **`Midi.UseWinRTMidi`** ;
-   - cocher la case **Value**, puis fermer la configuration et relancer Synthesia.
+     **`Midi.UseWinRTMidi`**
+   - cocher la case **Value**, puis fermer la configuration et relancer Synthesia
 3. Synthesia : **Settings → Music Devices** → dans les sorties, activer
    **Piano-Lights (MIDI OUT)** et y activer la fonction d'éclairage des touches
-   (*key lights*), en choisissant le mode qui sépare les mains par canal.
+   (*key lights*). À ce jour, il n'y a pas de mode qui sépare les mains par canal.
 4. Reporter les **numéros de canaux** main gauche / main droite affichés
    par Synthesia dans la page web (section Couleurs). Par défaut le
    firmware attend gauche = canal 1, droite = canal 2 ; tout autre canal
    prend la troisième couleur.
+5. Désactiver les fonctions autre que l'éclairage des touches pour ne pas avoir
+   le feedback du piano lui-même (*Prevent "local" notes* ne semble pas le faire).
 
 ## 4. Calibration
 
