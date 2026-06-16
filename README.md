@@ -7,7 +7,7 @@
 Firmware Arduino pour ESP32 WROOM : périphérique **BLE MIDI** reconnu par
 Windows et utilisable comme **sortie MIDI dans Synthesia** (fonction key
 lights). Les notes reçues allument les LEDs correspondantes d'un ruban
-**WS2812B**. La calibration et les couleurs se règlent via une **page web
+**WS2812B**. L'alignement et les couleurs se règlent via une **page web
 embarquée** (WiFi STA avec repli AP automatique).
 
 ## 1. Installation (Arduino IDE)
@@ -79,7 +79,7 @@ embarquée** (WiFi STA avec repli AP automatique).
 5. Désactiver les fonctions autre que l'éclairage des touches pour ne pas avoir
    le feedback du piano lui-même (*Prevent "local" notes* ne semble pas le faire).
 
-## 4. Calibration
+## 4. Alignement des LEDs avec les touches
 
 Dans la section Alignement de la page web :
 
