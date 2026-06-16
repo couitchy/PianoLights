@@ -425,6 +425,14 @@ function mapNote(n, g) {
     const i = n - g.firstNote, N = numLeds(g);
     let s = Math.round(i * g.ledsPerKey), e = Math.round((i + 1) * g.ledsPerKey);
     if (e <= s) e = s + 1;
+    if (BLACK.includes(n % 12)) {
+        let half = Math.floor((e - s) / 2);
+        if (half < 1) half = 1;
+        if (i < Math.floor(g.keyCount / 2))
+            s = e - half;
+        else
+            e = s + half;
+    }
     const r = [];
     for (let k = s; k < e; k++) {
         let L = k + g.ledOffset;

@@ -38,7 +38,7 @@
 // ----------
 // Constantes
 // ----------
-#define FW_VERSION              "1.1"
+#define FW_VERSION              "1.2"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // SSID du mode AP
@@ -170,6 +170,19 @@ CRGB colorForChannel(uint8_t ch) {
   return CRGB(cfg.colorOther);
 }
 
+bool isBlackKey(uint8_t note) {
+  switch (note % 12) {
+    case 1:
+    case 3:
+    case 6:
+    case 8:
+    case 10:
+        return true;
+    default:
+        return false;
+  }
+}
+
 // Synchronise l'état du ruban avec celui des notes
 void renderLeds() {
   const uint16_t n = activeNumLeds();
@@ -184,6 +197,15 @@ void renderLeds() {
     int         start = (int)lroundf(idx * cfg.ledsPerKey);
     int         end   = (int)lroundf((idx + 1) * cfg.ledsPerKey);
     if (end <= start) end = start + 1;  // au moins 1 LED par touche
+
+    if (isBlackKey(note)) {
+      int half = (end - start) / 2;
+      if (half < 1) half = 1;
+      if (idx < cfg.keyCount / 2)
+        start = end - half;
+      else
+        end = start + half;
+    }
 
     const CRGB c = colorForChannel(ch);
     for (int i = start; i < end; i++) {
