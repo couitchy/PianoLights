@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/057d7090-08d1-4f1d-8575-eb0081d24a46" alt="1" />
+</p>
+
 # Piano Lights, bridge BLE/MIDI entre Synthesia et un ruban LED
 
 Firmware Arduino pour ESP32 WROOM : périphérique **BLE MIDI** reconnu par
