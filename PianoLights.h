@@ -1,12 +1,12 @@
 /*
- * PianoLights.h, interface de configuration pour Piano Lights, embarquée en PROGMEM
- * Page autonome (SPA)
+ * PianoLights.h, configuration interface for Piano Lights, embedded in PROGMEM
+ * Standalone page (SPA)
  */
 #pragma once
 #include <pgmspace.h>
 
 const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -187,7 +187,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             accent-color: var(--amber);
         }
 
-        /* Aperçu ruban + clavier */
+        /* Strip + keyboard preview */
         #strip {
             display: flex;
             height: 13px;
@@ -278,41 +278,41 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 
 <main>
 <section>
-    <h2>Alignement</h2>
+    <h2>Alignment</h2>
     <div id="strip"></div>
     <div id="kb"></div>
-    <div id="mapinfo">Cliquer sur une touche pour l'allumer.</div>
+    <div id="mapinfo">Click a key to light it up.</div>
     <div class="row" style="margin:10px 0 16px">
-        <span class="note">Allumer selon :</span>
-        <label style="display:inline;margin:0"><input type="radio" name="hand" value="L" checked> Canal main gauche</label>
-        <label style="display:inline;margin:0"><input type="radio" name="hand" value="R"> Canal main droite</label>
-        <label style="display:inline;margin:0"><input type="radio" name="hand" value="O"> Canal autre</label>
-        <button onclick="allOff()">Tout éteindre</button>
+        <span class="note">Light according to:</span>
+        <label style="display:inline;margin:0"><input type="radio" name="hand" value="L" checked> Left-hand channel</label>
+        <label style="display:inline;margin:0"><input type="radio" name="hand" value="R"> Right-hand channel</label>
+        <label style="display:inline;margin:0"><input type="radio" name="hand" value="O"> Other channel</label>
+        <button onclick="allOff()">Turn all off</button>
     </div>
     <div class="grid">
         <div>
-            <label for="keyCount">Nombre de touches</label>
+            <label for="keyCount">Number of keys</label>
             <input id="keyCount" type="number" min="1" max="108" onchange="rebuild()">
         </div>
         <div>
-            <label for="firstNote">Première note (MIDI)</label>
+            <label for="firstNote">First note (MIDI)</label>
             <input id="firstNote" type="number" min="0" max="120" onchange="rebuild()">
         </div>
         <div>
-            <label for="ledsPerKey">LED par touche (densité)</label>
+            <label for="ledsPerKey">LEDs per key (density)</label>
             <input id="ledsPerKey" type="number" min="0.1" max="10" step="0.001" onchange="rebuild()">
         </div>
         <div>
-            <label for="ledOffset">Première LED (offset)</label>
+            <label for="ledOffset">First LED (offset)</label>
             <input id="ledOffset" type="number" min="-50" max="100" onchange="rebuild()">
         </div>
         <div>
-            <label for="reversed">Sens du ruban LED</label>
-            <label style="display:flex;gap:8px;align-items:center;margin-top:12px;color:var(--txt)"><input id="reversed" type="checkbox" onchange="rebuild()"> Inversé</label>
+            <label for="reversed">LED strip direction</label>
+            <label style="display:flex;gap:8px;align-items:center;margin-top:12px;color:var(--txt)"><input id="reversed" type="checkbox" onchange="rebuild()"> Reversed</label>
         </div>
     </div>
     <div class="row" style="margin-top:12px">
-        <span class="note">Preset de densité :</span>
+        <span class="note">Density preset:</span>
         <button onclick="density(60)">60/m</button>
         <button onclick="density(96)">96/m</button>
         <button onclick="density(120)">120/m</button>
@@ -323,72 +323,72 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </section>
 
 <section>
-    <h2>Couleurs</h2>
+    <h2>Colors</h2>
     <div class="grid">
         <div>
-            <label for="colorLeft">Main gauche</label>
-            <div class="row"><input id="colorLeft" type="color" onchange="paintAll()"><span class="note">canal</span><input id="chLeft" type="number" min="1" max="16" style="width:64px"></div>
+            <label for="colorLeft">Left hand</label>
+            <div class="row"><input id="colorLeft" type="color" onchange="paintAll()"><span class="note">channel</span><input id="chLeft" type="number" min="1" max="16" style="width:64px"></div>
         </div>
         <div>
-            <label for="colorRight">Main droite</label>
-            <div class="row"><input id="colorRight" type="color" onchange="paintAll()"><span class="note">canal</span><input id="chRight" type="number" min="1" max="16" style="width:64px"></div>
+            <label for="colorRight">Right hand</label>
+            <div class="row"><input id="colorRight" type="color" onchange="paintAll()"><span class="note">channel</span><input id="chRight" type="number" min="1" max="16" style="width:64px"></div>
         </div>
         <div>
-            <label for="colorOther">Autre</label>
+            <label for="colorOther">Other</label>
             <div class="row"><input id="colorOther" type="color" onchange="paintAll()"></div>
         </div>
         <div>
-            <label for="brightness">Luminosité (<span id="briVal">—</span>)</label>
+            <label for="brightness">Brightness (<span id="briVal">—</span>)</label>
             <input id="brightness" type="range" min="5" max="255" oninput="briVal.textContent=this.value">
         </div>
     </div>
-    <p class="note" style="margin-bottom:0">Les numéros de canaux correspondent à ceux transmis par Synthesia.</p>
+    <p class="note" style="margin-bottom:0">Channel numbers match those sent by Synthesia.</p>
 </section>
 
 <section>
-    <h2>Matériel</h2>
+    <h2>Hardware</h2>
     <div class="grid">
         <div>
-            <label for="ledPin">GPIO auquel le ruban LED est connecté</label>
+            <label for="ledPin">GPIO the LED strip is connected to</label>
             <select id="ledPin"></select>
         </div>
-        <div id="reboot" style="align-self:end" hidden><button onclick="reboot()">Redémarrer</button></div>
+        <div id="reboot" style="align-self:end" hidden><button onclick="reboot()">Reboot</button></div>
     </div>
-    <p class="note" style="margin-bottom:0">Le changement de GPIO nécessite un redémarrage.</p>
+    <p class="note" style="margin-bottom:0">Changing the GPIO requires a reboot.</p>
 </section>
 
 <section>
     <h2>WiFi</h2>
     <div class="grid">
         <div>
-            <label for="ssid">Réseau (SSID)</label>
+            <label for="ssid">Network (SSID)</label>
             <input id="ssid" type="text" autocomplete="off">
         </div>
         <div>
-            <label for="pass">Mot de passe</label>
+            <label for="pass">Password</label>
             <input id="pass" type="password" autocomplete="off">
         </div>
-        <div style="align-self:end"><button onclick="saveWifi()">Enregistrer et redémarrer</button></div>
+        <div style="align-self:end"><button onclick="saveWifi()">Save and reboot</button></div>
     </div>
-    <p class="note" style="margin-bottom:0">En cas d'échec de connexion au démarrage, un point d'accès « Piano-Lights-AP » hébergera cette page sur <a href="http://pianolights.local" target="_blank" rel="noopener">http://pianolights.local</a> ou <a href="http://192.168.4.1" target="_blank" rel="noopener">http://192.168.4.1</a>.</p>
+    <p class="note" style="margin-bottom:0">If the connection fails at startup, a 'Piano-Lights-AP' access point will host this page at <a href="http://pianolights.local" target="_blank" rel="noopener">http://pianolights.local</a> or <a href="http://192.168.4.1" target="_blank" rel="noopener">http://192.168.4.1</a>.</p>
 </section>
 
 <section>
-    <h2>Mise à jour</h2>
+    <h2>Update</h2>
     <div class="row">
         <input id="fw" type="file" accept=".bin">
-        <button id="fwBtn" onclick="uploadFw()">Envoyer</button>
-        <span class="note">Version actuelle : <b id="fwVer">—</b></span>
+        <button id="fwBtn" onclick="uploadFw()">Send</button>
+        <span class="note">Current version: <b id="fwVer">—</b></span>
     </div>
     <div id="fwBar" hidden style="height:8px;background:#101016;border:1px solid var(--line);border-radius:5px;overflow:hidden;margin-top:14px">
         <div id="fwFill" style="height:100%;width:0;background:var(--amber);transition:width .15s"></div>
     </div>
-    <p class="note" style="margin-bottom:0">Sélectionner le fichier <code>.bin</code> à flasher. Redémarrage automatique à la fin de l'opération.</p>
+    <p class="note" style="margin-bottom:0">Select the <code>.bin</code> to flash. Automatic reboot once the operation completes.</p>
 </section>
 </main>
 
 <footer>
-    <button class="primary" onclick="save()">Enregistrer les préférences</button>
+    <button class="primary" onclick="save()">Save preferences</button>
     <span id="msg"></span>
 </footer>
 
@@ -397,7 +397,7 @@ const $ = i => document.getElementById(i);
 const PINS = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
 const BLACK = [1, 3, 6, 8, 10];
 const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-let on = {};           // note MIDI -> canal (état local des tests)
+let on = {};           // MIDI note -> channel (local test state)
 
 function api(p, b) {
     return fetch(p, b ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) } : undefined).then(r => r.json());
@@ -481,7 +481,7 @@ function buildKb() {
         d.onclick = () => toggle(n);
         d.onmouseenter = () => {
             const m = mapNote(n, geo());
-            $('mapinfo').textContent = 'Touche ' + noteName(n) + ' (MIDI ' + n + ') → LED' + (m.length > 1 ? 's ' : ' ') + (m.length ? Math.min(...m) + (m.length > 1 ? '–' + Math.max(...m) : '') : 'hors ruban');
+            $('mapinfo').textContent = 'Key ' + noteName(n) + ' (MIDI ' + n + ') → LED' + (m.length > 1 ? 's ' : ' ') + (m.length ? Math.min(...m) + (m.length > 1 ? '–' + Math.max(...m) : '') : 'off strip');
         };
         kb.appendChild(d);
     }
@@ -516,7 +516,7 @@ async function toggle(n) {
     try {
         await api('/api/test', { note: n, on: !!c, ch: c || 1 });
     } catch (e) {
-        msg('Erreur réseau');
+        msg('Network error');
     }
 }
 
@@ -549,19 +549,19 @@ async function save() {
     try {
         const r = await api('/api/config', body);
         if (r.needsReboot) $('reboot').hidden = false;
-        msg(r.needsReboot ? 'Préférences enregistrées — Redémarrage nécessaire' : 'Préférences enregistrées');
+        msg(r.needsReboot ? 'Preferences saved — Reboot required' : 'Preferences saved');
     } catch (e) {
-        msg('Erreur réseau');
+        msg('Network error');
     }
 }
 
 async function saveWifi() {
-    if (!$('ssid').value) return msg('SSID vide');
+    if (!$('ssid').value) return msg('SSID empty');
     try {
         await api('/api/wifi', { ssid: $('ssid').value, pass: $('pass').value });
-        msg("Enregistré — Redémarrage...");
+        msg("Saved — Rebooting...");
     } catch (e) {
-        msg("Redémarrage...");
+        msg("Rebooting...");
     }
 }
 
@@ -569,13 +569,13 @@ async function reboot() {
     try {
         await api('/api/reboot', {});
     } catch (e) {}
-    msg("Redémarrage...");
+    msg("Rebooting...");
 }
 
 function uploadFw() {
     const f = $('fw').files[0];
-    if (!f) return msg('Aucun fichier sélectionné');
-    if (!f.name.toLowerCase().endsWith('.bin')) return msg('Fichier .bin attendu');
+    if (!f) return msg('No file selected');
+    if (!f.name.toLowerCase().endsWith('.bin')) return msg('.bin file expected');
 
     const bar = $('fwBar'), fill = $('fwFill');
     bar.hidden = false;
@@ -594,21 +594,21 @@ function uploadFw() {
         $('fwBtn').disabled = false;
         if (xhr.status === 200) {
             fill.style.width = '100%';
-            msg('Mise à jour réussie — Redémarrage...');
+            msg('Update successful — Rebooting...');
             setTimeout(() => location.reload(), 9000);
         } else {
-            msg('Échec de la mise à jour');
+            msg('Update failed');
         }
     };
-    xhr.onerror = () => { $('fwBtn').disabled = false; msg('Erreur réseau pendant l\'envoi'); };
-    msg('Envoi en cours...');
+    xhr.onerror = () => { $('fwBtn').disabled = false; msg('Network error during upload'); };
+    msg('Uploading...');
     xhr.send(fd);
 }
 
 function status(s) {
     $('chipWifi').textContent = (s.mode == 'ap' ? 'AP ' : 'WiFi ') + s.ip;
     $('chipWifi').className = 'chip' + (s.mode == 'sta' ? ' on' : '');
-    $('chipBle').textContent = s.ble ? 'BLE connecté' : 'BLE en attente';
+    $('chipBle').textContent = s.ble ? 'BLE connected' : 'BLE waiting';
     $('chipBle').className = 'chip' + (s.ble ? ' on' : '');
     $('chipLeds').textContent = s.numLeds + ' LEDs';
     $('fwVer').textContent = 'v' + s.version;
@@ -640,7 +640,7 @@ async function load() {
         $('ssid').value = c.ssid || '';
         status(c.status);
     } catch (e) {
-        msg('Impossible de charger la configuration');
+        msg('Could not load the configuration');
     }
     rebuild();
 }

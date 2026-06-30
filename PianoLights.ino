@@ -1,15 +1,15 @@
 /*
  * ==================================================================================================
- *  PianoLights.ino, bridge BLE/MIDI entre Synthesia et un ruban LED
+ *  PianoLights.ino, a BLE/MIDI bridge between Synthesia and a LED strip
  * ==================================================================================================
- *  Cible      : ESP32 WROOM ("ESP32 Dev Module")
- *  Rôle       : Périphérique BLE MIDI (vu comme sortie MIDI par Synthesia sous Windows)
- *  Contrôle   : Les notes reçues pilotent un ruban LED WS2812B pour indiquer les touches à jouer
- *  Config     : Page web embarquée (WiFi STA avec repli AP automatique), préférences stockées en NVS
+ *  Target     : ESP32 WROOM ("ESP32 Dev Module")
+ *  Role       : BLE/MIDI peripheral (seen as a MIDI output by Synthesia on Windows)
+ *  Control    : Incoming notes drive a WS2812B LED strip to show which keys to play
+ *  Config     : Embedded web page (WiFi STA with automatic AP fallback), preferences stored in NVS
  *
- *  Bibliothèques requises sous Arduino IDE :
+ *  Libraries required under the Arduino IDE:
  *    - MIDI Library        (Francois Best)
- *    - BLE-MIDI            (lathoub, mais à patcher)
+ *    - BLE-MIDI            (lathoub, must be patched)
  *    - NimBLE-Arduino      (h2zero)
  *    - FastLED             (Daniel Garcia)
  *    - ArduinoJson         (Benoit Blanchon)
@@ -35,39 +35,39 @@
 
 #include "PianoLights.h"
 
-// ----------
-// Constantes
-// ----------
+// ---------
+// Constants
+// ---------
 #define FW_VERSION              "1.2"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
-#define WIFI_AP_SSID            "Piano-Lights-AP"   // SSID du mode AP
-#define MDNS_HOSTNAME           "pianolights"       // accès via http://pianolights.local
-#define BLE_DEVICE_NAME         "Piano-Lights"      // nom visible sous Windows
-#define LED_MAX_COUNT           300                 // buffer max alloué
+#define WIFI_AP_SSID            "Piano-Lights-AP"   // AP-mode SSID
+#define MDNS_HOSTNAME           "pianolights"       // access via http://pianolights.local
+#define BLE_DEVICE_NAME         "Piano-Lights"      // name shown under Windows
+#define LED_MAX_COUNT           300                 // max allocated buffer
 #define LED_FRAME_INTERVAL_MS   15                  // ~60 fps max
 
-// Pins autorisées pour le ruban lumineux (on exclut notamment les pins de strapping, flash et input-only)
+// Allowed pins for the LED strip (strapping, flash and input-only pins are excluded)
 static const uint8_t LED_PIN_WHITELIST[] = {16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
 
 // -----------
-// Préférences
+// Preferences
 // -----------
 struct Config {
-  // Géométrie
-  uint8_t  keyCount    = 88;       // nombre de touches du clavier
-  uint8_t  firstNote   = 21;       // note MIDI de la 1ère touche (21 = A0)
-  float    ledsPerKey  = 2.0f;     // ratio LEDs/touche (flottant, affinable)
-  int16_t  ledOffset   = 0;        // index de la 1ère LED utile
-  bool     reversed    = false;    // sens du ruban
-  uint8_t  ledPin      = 16;       // GPIO data (redémarrage requis)
-  // Couleurs
-  uint32_t colorLeft   = 0x00A0FF; // main gauche
-  uint32_t colorRight  = 0xFF4000; // main droite
-  uint32_t colorOther  = 0x00FF60; // tout autre canal
-  uint8_t  chLeft      = 1;        // canal MIDI main gauche (1-16)
-  uint8_t  chRight     = 2;        // canal MIDI main droite (1-16)
-  uint8_t  brightness  = 100;      // luminosité globale (5-255)
+  // Geometry
+  uint8_t  keyCount    = 88;       // number of keyboard keys
+  uint8_t  firstNote   = 21;       // MIDI note of the 1st key (21 = A0)
+  float    ledsPerKey  = 2.0f;     // LEDs-per-key ratio (float, fine-tunable)
+  int16_t  ledOffset   = 0;        // index of the 1st usable LED
+  bool     reversed    = false;    // strip direction
+  uint8_t  ledPin      = 16;       // data GPIO (reboot required)
+  // Colors
+  uint32_t colorLeft   = 0x00A0FF; // left hand
+  uint32_t colorRight  = 0xFF4000; // right hand
+  uint32_t colorOther  = 0x00FF60; // any other channel
+  uint8_t  chLeft      = 1;        // left-hand MIDI channel (1-16)
+  uint8_t  chRight     = 2;        // right-hand MIDI channel (1-16)
+  uint8_t  brightness  = 100;      // global brightness (5-255)
   // WiFi
   char     ssid[33]    = "";
   char     pass[65]    = "";
@@ -76,27 +76,27 @@ struct Config {
 Config       cfg;
 Preferences  prefs;
 
-// -----------
-// État global
-// -----------
+// ------------
+// Global state
+// ------------
 BLEMIDI_CREATE_INSTANCE(BLE_DEVICE_NAME, MIDI)
 
 CRGB              leds[LED_MAX_COUNT];
 AsyncWebServer    server(80);
 
-volatile uint8_t  noteChan[128] = {0};    // 0 = éteinte, sinon canal MIDI 1-16
+volatile uint8_t  noteChan[128] = {0};    // 0 = off, otherwise MIDI channel 1-16
 volatile bool     ledsDirty     = true;
 volatile bool     bleConnected  = false;
-volatile bool     otaInProgress = false;  // fige le rendu LED pendant l'écriture dans la flash
+volatile bool     otaInProgress = false;  // freezes LED rendering while writing to flash
 
 bool      apMode        = false;
-uint32_t  rebootAt      = 0;              // != 0 -> redémarrage planifié
+uint32_t  rebootAt      = 0;              // != 0 -> scheduled reboot
 uint32_t  lastWifiRetry = 0;
 uint32_t  lastShow      = 0;
 
-// --------------
-// Stockage (NVS)
-// --------------
+// -------------
+// Storage (NVS)
+// -------------
 void loadConfig() {
   prefs.begin("pianolights", true);
   cfg.keyCount    = prefs.getUChar("kc",   cfg.keyCount);
@@ -136,7 +136,7 @@ void saveConfig() {
 }
 
 // ------------
-// Gestion LEDs
+// LED handling
 // ------------
 bool isValidLedPin(uint8_t pin) {
   for (uint8_t p : LED_PIN_WHITELIST)
@@ -150,7 +150,7 @@ uint16_t activeNumLeds() {
   return (uint16_t)constrain(n, 1L, (long)LED_MAX_COUNT);
 }
 
-// FastLED a besoin d'avoir la pin figée dès la compilation : on instancie donc chaque pin potentielle et on sélectionne au boot
+// FastLED needs the pin fixed at compile time, so we instantiate every possible pin and select it at boot
 #define LED_PIN_CASE(p) case p: FastLED.addLeds<WS2812B, p, GRB>(leds, LED_MAX_COUNT); break;
 void setupLeds() {
   if (!isValidLedPin(cfg.ledPin)) cfg.ledPin = 16;
@@ -160,7 +160,7 @@ void setupLeds() {
     LED_PIN_CASE(26) LED_PIN_CASE(27) LED_PIN_CASE(32) LED_PIN_CASE(33)
   }
   FastLED.setBrightness(cfg.brightness);
-  // Limite conso
+  // Power cap
   FastLED.setMaxPowerInVoltsAndMilliamps(5, 2000);
 }
 
@@ -183,7 +183,7 @@ bool isBlackKey(uint8_t note) {
   }
 }
 
-// Synchronise l'état du ruban avec celui des notes
+// Syncs the strip state with the note state
 void renderLeds() {
   const uint16_t n = activeNumLeds();
   fill_solid(leds, LED_MAX_COUNT, CRGB::Black);
@@ -196,7 +196,7 @@ void renderLeds() {
     const int   idx   = note - cfg.firstNote;
     int         start = (int)lroundf(idx * cfg.ledsPerKey);
     int         end   = (int)lroundf((idx + 1) * cfg.ledsPerKey);
-    if (end <= start) end = start + 1;  // au moins 1 LED par touche
+    if (end <= start) end = start + 1;  // at least 1 LED per key
 
     if (isBlackKey(note)) {
       int half = (end - start) / 2;
@@ -241,9 +241,9 @@ void bootAnimation() {
   FastLED.show();
 }
 
-// ------------
-// Gestion MIDI
-// ------------
+// -------------
+// MIDI handling
+// -------------
 void onNoteOn(byte channel, byte note, byte velocity) {
   Serial.printf("[MIDI] NoteOn  ch=%u note=%u vel=%u\n", channel, note, velocity);
   noteChan[note] = (velocity == 0 ? 0 : channel);
@@ -267,47 +267,47 @@ void onControlChange(byte channel, byte number, byte value) {
 }
 
 void setupBleMidi() {
-  BLEMIDI.setHandleConnected([]()    { bleConnected = true;  Serial.printf("[BLE] Périphérique \"%s\" connecté\n",   BLE_DEVICE_NAME); });
-  BLEMIDI.setHandleDisconnected([]() { bleConnected = false; Serial.printf("[BLE] Périphérique \"%s\" déconnecté\n", BLE_DEVICE_NAME); });
+  BLEMIDI.setHandleConnected([]()    { bleConnected = true;  Serial.printf("[BLE] Device \"%s\" connected\n",   BLE_DEVICE_NAME); });
+  BLEMIDI.setHandleDisconnected([]() { bleConnected = false; Serial.printf("[BLE] Device \"%s\" disconnected\n", BLE_DEVICE_NAME); });
   MIDI.setHandleNoteOn(onNoteOn);
   MIDI.setHandleNoteOff(onNoteOff);
   MIDI.setHandleControlChange(onControlChange);
   MIDI.begin(MIDI_CHANNEL_OMNI);
-  Serial.printf("[BLE] Périphérique \"%s\" en attente d'appairage\n", BLE_DEVICE_NAME);
+  Serial.printf("[BLE] Device \"%s\" waiting for pairing\n", BLE_DEVICE_NAME);
 }
 
-// ------------
-// Gestion WiFi
-// ------------
+// -------------
+// WiFi handling
+// -------------
 void startAccessPoint() {
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(WIFI_AP_SSID);       // AP ouvert (pour la configuration)
+  WiFi.softAP(WIFI_AP_SSID);       // open AP (for configuration)
   apMode = true;
-  Serial.printf("[WiFi] Mode AP — SSID \"%s\", IP %s\n", WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
+  Serial.printf("[WiFi] AP mode — SSID \"%s\", IP %s\n", WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
 }
 
 void setupWifi() {
-  WiFi.persistent(false);          // les identifiants sont déjà gérés ici
-  WiFi.setAutoReconnect(false);    // reconnexion gérée dans la boucle principale
+  WiFi.persistent(false);          // credentials are already managed
+  WiFi.setAutoReconnect(false);    // reconnection handled in the main loop
 
-  if (strlen(cfg.ssid) == 0) {     // premier démarrage : rien d'enregistré
+  if (strlen(cfg.ssid) == 0) {     // first boot: nothing saved
     startAccessPoint();
   }
   else {
     WiFi.mode(WIFI_STA);
     WiFi.setHostname(MDNS_HOSTNAME);
     WiFi.begin(cfg.ssid, cfg.pass);
-    Serial.printf("[WiFi] Connexion à \"%s\"...\n", cfg.ssid);
+    Serial.printf("[WiFi] Connecting to \"%s\"...\n", cfg.ssid);
     const uint32_t t0 = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_CONNECT_TIMEOUT_MS) {
       delay(100);
     }
     if (WiFi.status() == WL_CONNECTED) {
       apMode = false;
-      Serial.printf("[WiFi] Connecté — IP %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("[WiFi] Connected — IP %s\n", WiFi.localIP().toString().c_str());
     }
     else {
-      Serial.println("[WiFi] Échec STA -> repli en point d'accès");
+      Serial.println("[WiFi] STA failed -> falling back to access point");
       startAccessPoint();
     }
   }
@@ -319,17 +319,17 @@ void setupWifi() {
 }
 
 void maintainWifi() {
-  // Reconnexion uniquement en mode STA (jamais en boucle agressive pour ne pas perturber le BLE)
+  // Reconnect only in STA mode (never in an aggressive loop, so as not to disturb BLE)
   if (apMode || WiFi.status() == WL_CONNECTED) return;
   if (millis() - lastWifiRetry < WIFI_RETRY_INTERVAL_MS) return;
   lastWifiRetry = millis();
-  Serial.println("[WiFi] Tentative de reconnexion...");
+  Serial.println("[WiFi] Attempting to reconnect...");
   WiFi.reconnect();
 }
 
-// -----------------------
-// Helpers JSON / couleurs
-// -----------------------
+// --------------------
+// JSON / color helpers
+// --------------------
 String colorToHex(uint32_t c) {
   char buf[8];
   snprintf(buf, sizeof(buf), "#%06X", (unsigned)(c & 0xFFFFFF));
@@ -341,12 +341,12 @@ uint32_t hexToColor(const char *s) {
   return s ? (uint32_t)strtoul(s, nullptr, 16) : 0;
 }
 
-// -------------------------
-// Gestion mise à jour (OTA)
-// -------------------------
+// ---------------------
+// Update handling (OTA)
+// ---------------------
 void handleOtaUpload(AsyncWebServerRequest *req, const String &filename, size_t index, uint8_t *data, size_t len, bool final) {
   if (index == 0) {
-    Serial.printf("[OTA] Début : %s\n", filename.c_str());
+    Serial.printf("[OTA] Start: %s\n", filename.c_str());
     otaInProgress = true;
     fill_solid(leds, LED_MAX_COUNT, CRGB::Black);
     FastLED.show();
@@ -363,7 +363,7 @@ void handleOtaUpload(AsyncWebServerRequest *req, const String &filename, size_t 
 
   if (final) {
     if (Update.end(true)) {
-      Serial.printf("[OTA] Terminée : %u octets\n", (unsigned)(index + len));
+      Serial.printf("[OTA] Done: %u bytes\n", (unsigned)(index + len));
     } else {
       Serial.print("[OTA] ");
       Update.printError(Serial);
@@ -376,12 +376,12 @@ void handleOtaResult(AsyncWebServerRequest *req) {
   AsyncWebServerResponse *res = req->beginResponse(ok ? 200 : 500, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
   res->addHeader("Connection", "close");
   req->send(res);
-  if (ok) rebootAt = millis() + 1500; // laisse le temps à la réponse HTTP de partir
+  if (ok) rebootAt = millis() + 1500; // give the HTTP response time to be sent
   otaInProgress = false;
 }
 
 // -------------------
-// Gestion serveur web
+// Web server handling
 // -------------------
 void sendConfigJson(AsyncWebServerRequest *req) {
   JsonDocument doc;
@@ -397,7 +397,7 @@ void sendConfigJson(AsyncWebServerRequest *req) {
   doc["chLeft"]      = cfg.chLeft;
   doc["chRight"]     = cfg.chRight;
   doc["brightness"]  = cfg.brightness;
-  doc["ssid"]        = cfg.ssid;  // le mot de passe n'est jamais renvoyé
+  doc["ssid"]        = cfg.ssid;  // the password is never returned
 
   JsonObject st  = doc["status"].to<JsonObject>();
   st["mode"]     = apMode ? "ap" : "sta";
@@ -461,7 +461,7 @@ void handleWifiPost(AsyncWebServerRequest *req, JsonVariant &json) {
     strlcpy(cfg.ssid, o["ssid"], sizeof(cfg.ssid));
     strlcpy(cfg.pass, o["pass"] | "", sizeof(cfg.pass));
     saveConfig();
-    rebootAt = millis() + 1500; // laisse le temps à la réponse HTTP de partir
+    rebootAt = millis() + 1500; // give the HTTP response time to be sent
     req->send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
   } else {
     req->send(400, "application/json", "{\"ok\":false}");
@@ -496,12 +496,12 @@ void setupWebServer() {
   });
 
   server.begin();
-  Serial.println("[HTTP] Serveur démarré sur le port 80");
+  Serial.println("[HTTP] Server started on port 80");
 }
 
-// -----------------------
-// Setup des périphériques
-// -----------------------
+// ----------------
+// Peripheral setup
+// ----------------
 void setup() {
   Serial.begin(115200);
   Serial.println("\nPianoLights " FW_VERSION);
@@ -510,22 +510,22 @@ void setup() {
   setupLeds();
   bootAnimation();
 
-  setupWifi();         // STA (bloquant 15 s max) puis repli AP éventuel
+  setupWifi();         // STA (blocking, 15 s max) then possible AP fallback
   setupWebServer();
-  setupBleMidi();      // advertising BLE
+  setupBleMidi();      // BLE advertising
 }
 
-// -----------------
-// Boucle principale
-// -----------------
+// ---------
+// Main loop
+// ---------
 void loop() {
-  // Messages MIDI
+  // MIDI messages
   MIDI.read();
 
-  // Messages WiFi
+  // WiFi messages
   maintainWifi();
 
-  // Rendu LEDs
+  // LED rendering
   if (!otaInProgress && ledsDirty && millis() - lastShow >= LED_FRAME_INTERVAL_MS) {
     ledsDirty = false;
     renderLeds();
@@ -533,9 +533,9 @@ void loop() {
     lastShow = millis();
   }
 
-  // Cas d'un redémarrage différé
+  // Pending reboot
   if (rebootAt && millis() > rebootAt) {
-    Serial.println("[SYS] Redémarrage...");
+    Serial.println("[SYS] Rebooting...");
     delay(100);
     ESP.restart();
   }
