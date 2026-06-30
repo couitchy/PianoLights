@@ -1,6 +1,13 @@
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/057d7090-08d1-4f1d-8575-eb0081d24a46" alt="1" />
-</p>
+<table>
+  <tr>
+    <td>
+      <img src="https://github.com/user-attachments/assets/50fa1be6-618c-4df2-8bbb-7a6f6f3c3b64" alt="1" width="100%" />
+    </td>
+    <td>
+      <video src="https://github.com/user-attachments/assets/31f3e455-6a3a-4056-8376-136cc2250673" alt="2" width="100%" />
+    </td>
+  </tr>
+</table>
 
 # Piano Lights, a BLE/MIDI bridge between Synthesia and a LED strip
 
@@ -76,7 +83,7 @@ page** (WiFi STA with automatic AP fallback).
    by Synthesia into the web page (Colors section). By default the
    firmware expects left = channel 1, right = channel 2; any other channel
    uses the third color.
-5. Disable features other than key lighting to avoid getting
+5. (Optional) Disable features other than key lighting to avoid getting
    feedback from the piano itself (*Prevent "local" notes* does not seem to do it).
 
 ## 4. Aligning the LEDs with the keys
