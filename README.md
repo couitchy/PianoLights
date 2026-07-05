@@ -17,6 +17,11 @@ feature). Incoming notes light up the matching LEDs of a **WS2812B**
 strip. Alignment and colors are configured through an **embedded web
 page** (WiFi STA with automatic AP fallback).
 
+Optionally, an **I2S MEMS microphone** (INMP441) turns the firmware into a
+MIDI *input* as well: it listens to an **acoustic piano** and reports the
+notes actually played back to Synthesia, so the song waits for you even
+without a digital piano ("Melody" mode).
+
 ## 1. Installation (Arduino IDE)
 
 1. Install the board support package **esp32 by Espressif Systems**
@@ -99,12 +104,51 @@ In the Alignment section of the web page:
 - Clicking the keys of the **virtual keyboard** actually lights the LEDs.
 "Save preferences" stores everything in flash.
 
-## 5. Architecture
+## 5. Playing an acoustic piano + using the microphone
 
-| File           | Role                                                        |
-|----------------|-------------------------------------------------------------|
-| `PianoLights.ino` | BLE/MIDI, note→LED mapping, WiFi STA/AP, HTTP API, NVS     |
-| `PianoLights.h`   | Configuration page (standalone HTML/CSS/JS, in PROGMEM)    |
+This optional feature lets Synthesia's *"wait for note"* practice mode work with
+a real acoustic piano: an I2S microphone listens to the room and the firmware
+sends the notes it hears back over BLE/MIDI.
+
+1. In the **Hardware (mic)** section of the web page, tick *Enable I2S microphone*,
+   choose the three GPIOs, then **Save preferences** and **reboot** (enabling the
+   mic or changing a GPIO needs a reboot; gain and threshold apply live).
+2. In Synthesia, also select **Piano-Lights** as a MIDI **input** (Settings →
+   Music Devices), so the notes detected by the microphone reach the game.
+3. Adjust **gain** so the input-level meter reacts clearly to your playing without
+   pinning at the top, and **threshold** to trade sensitivity against false
+   positives. The detected note is shown live under the meter.
+
+### Limitations
+
+The firmware does not attempt blind polyphonic transcription.
+Instead it verifies the notes Synthesia already expects: the keys it lights
+up are exactly the notes the player should hit, so a small Goertzel filter bank
+only checks whether each expected note's fundamental and first harmonics are
+present in a 100 ms window after a percussive onset.
+
+Each expected note is confirmed or denied **independently**, so chords work: every
+lit note is scored on its own and the ones actually heard are sent. The score is a
+local spectral-contrast measure (how sharply a note's harmonics stand out against
+the frequencies just beside them).
+
+- Reliable range is roughly **C2 to C7**; the extreme bass is hard to resolve in a
+  100 ms window and the extreme treble is faint.
+- **Exact octaves** are the one intrinsically ambiguous case: an octave shares every
+  harmonic of the note below it, so when Synthesia lights both a note and its exact
+  octave at the same instant, the upper one is judged from the even/odd harmonic
+  balance rather than raw energy. This is reliable for a real octave doubling but can
+  occasionally misjudge a note played only as the lower of an expected octave.
+
+## 6. Architecture
+
+| File                | Role                                                        |
+|---------------------|-------------------------------------------------------------|
+| `PianoLights.ino`   | BLE/MIDI, note→LED mapping, WiFi STA/AP, HTTP API, NVS       |
+| `PianoLights.h`     | Configuration page (standalone HTML/CSS/JS, in PROGMEM)      |
+| `PianoLightsMic.h`  | I2S microphone capture, onset + Goertzel note detection, calibration |
 
 HTTP API: `GET /api/config`, `POST /api/config`, `POST /api/test`
-(`{note, on, ch}`), `POST /api/alloff`, `POST /api/wifi`, `POST /api/reboot`.
+(`{note, on, ch}`), `POST /api/alloff`, `POST /api/wifi`, `POST /api/reboot`,
+`GET /api/mic/status`, `GET /api/mic/cal`, `POST /api/mic/cal`
+(`{note}` arms a capture, `{note:-1}` disarms, `{clear:true}` erases calibration).

@@ -238,6 +238,28 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             margin-top: 8px;
         }
 
+        #micBar {
+            height: 10px;
+            background: #101016;
+            border: 1px solid var(--line);
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        #micFill {
+            height: 100%;
+            width: 0;
+            background: var(--amber);
+            transition: width .12s linear;
+        }
+
+        #micNote {
+            font: 600 26px/1.2 ui-monospace, Consolas, monospace;
+            color: var(--amber);
+            min-height: 32px;
+            margin-top: 6px;
+        }
+
         footer {
             position: fixed;
             bottom: 0;
@@ -278,7 +300,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 
 <main>
 <section>
-    <h2>Alignment</h2>
+    <h2>Keys alignment</h2>
     <div id="strip"></div>
     <div id="kb"></div>
     <div id="mapinfo">Click a key to light it up.</div>
@@ -323,7 +345,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </section>
 
 <section>
-    <h2>Colors</h2>
+    <h2>Keys colors</h2>
     <div class="grid">
         <div>
             <label for="colorLeft">Left hand</label>
@@ -346,7 +368,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </section>
 
 <section>
-    <h2>Hardware</h2>
+    <h2>LED configuration</h2>
     <div class="grid">
         <div>
             <label for="ledPin">GPIO the LED strip is connected to</label>
@@ -358,7 +380,53 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </section>
 
 <section>
-    <h2>WiFi</h2>
+    <h2>Microphone configuration</h2>
+    <div class="row" style="margin-bottom:14px">
+        <label style="display:flex;gap:8px;align-items:center;margin:0;color:var(--txt)">
+            <input id="micEnabled" type="checkbox"> Enable I2S microphone
+        </label>
+    </div>
+    <div class="grid">
+        <div>
+            <label for="micSck">GPIO for clock</label>
+            <select id="micSck"></select>
+        </div>
+        <div>
+            <label for="micWs">GPIO for channel</label>
+            <select id="micWs"></select>
+        </div>
+        <div>
+            <label for="micSd">GPIO for data</label>
+            <select id="micSd"></select>
+        </div>
+        <div>
+            <label for="micGain">Gain (<span id="micGainVal">—</span>)</label>
+            <input id="micGain" type="range" min="1" max="64" oninput="micGainVal.textContent=this.value">
+        </div>
+        <div>
+            <label for="micThreshold">Detection threshold (<span id="micThVal">—</span>)</label>
+            <input id="micThreshold" type="range" min="1" max="100" oninput="micThVal.textContent=this.value">
+        </div>
+    </div>
+    <div style="margin-top:16px">
+        <label>Input level</label>
+        <div id="micBar"><div id="micFill"></div></div>
+        <div id="micInfo" class="note" style="font-family:ui-monospace,Consolas,monospace;margin-top:4px">—</div>
+        <div id="micNote">—</div>
+    </div>
+    <div class="row" style="margin-top:14px">
+        <span class="note">Calibration:</span>
+        <select id="calNote" style="width:auto"></select>
+        <button onclick="calCaptureOne()">Capture this note</button>
+        <button onclick="calClearAll()">Clear</button>
+        <span class="note" id="calInfo"></span>
+    </div>
+    <p class="note" style="margin-bottom:0">Microphone's L/R pin should be grounded (left channel). Detected notes are sent over BLE/MIDI.
+    Calibration measures the real tuning of the piano, note by note. Reliable range: roughly C2 to C7.</p>
+</section>
+
+<section>
+    <h2>WiFi settings</h2>
     <div class="grid">
         <div>
             <label for="ssid">Network (SSID)</label>
@@ -374,7 +442,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </section>
 
 <section>
-    <h2>Update</h2>
+    <h2>Firmware update</h2>
     <div class="row">
         <input id="fw" type="file" accept=".bin">
         <button id="fwBtn" onclick="uploadFw()">Send</button>
@@ -394,10 +462,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 
 <script>
 const $ = i => document.getElementById(i);
-const PINS = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
-const BLACK = [1, 3, 6, 8, 10];
-const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-let on = {};           // MIDI note -> channel (local test state)
+const LED_PINS = [5, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+const MIC_PINS = LED_PINS.concat([34, 35, 36, 39]);
+const KEYS_BLACK = [1, 3, 6, 8, 10];
+const KEYS_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+let on = {};
+let micRunning = false
+let calBusy = false;
 
 function api(p, b) {
     return fetch(p, b ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) } : undefined).then(r => r.json());
@@ -414,7 +485,7 @@ function geo() {
 }
 
 function noteName(n) {
-    return NAMES[n % 12] + (Math.floor(n / 12) - 1);
+    return KEYS_NAMES[n % 12] + (Math.floor(n / 12) - 1);
 }
 
 function numLeds(g) {
@@ -425,7 +496,7 @@ function mapNote(n, g) {
     const i = n - g.firstNote, N = numLeds(g);
     let s = Math.round(i * g.ledsPerKey), e = Math.round((i + 1) * g.ledsPerKey);
     if (e <= s) e = s + 1;
-    if (BLACK.includes(n % 12)) {
+    if (KEYS_BLACK.includes(n % 12)) {
         let half = Math.floor((e - s) / 2);
         if (half < 1) half = 1;
         if (i < Math.floor(g.keyCount / 2))
@@ -463,13 +534,13 @@ function buildKb() {
     const g = geo(), kb = $('kb');
     kb.innerHTML = '';
     let whites = 0;
-    for (let i = 0; i < g.keyCount; i++) if (!BLACK.includes((g.firstNote + i) % 12)) whites++;
+    for (let i = 0; i < g.keyCount; i++) if (!KEYS_BLACK.includes((g.firstNote + i) % 12)) whites++;
     const ww = 100 / Math.max(1, whites);
     let wi = 0;
     for (let i = 0; i < g.keyCount; i++) {
         const n = g.firstNote + i, d = document.createElement('div');
         d.dataset.note = n;
-        if (!BLACK.includes(n % 12)) {
+        if (!KEYS_BLACK.includes(n % 12)) {
             d.className = 'wk';
             d.style.width = ww + '%';
             wi++;
@@ -535,16 +606,27 @@ function msg(t) {
 }
 
 async function save() {
+    if ($('micEnabled').checked) {
+        const p = [+$('micSck').value, +$('micWs').value, +$('micSd').value];
+        if (new Set(p).size < 3) return msg('Microphone GPIOs must be distinct');
+        if (p.includes(+$('ledPin').value)) return msg('A microphone GPIO conflicts with the LED strip GPIO');
+    }
     const g = geo();
     const body = {
         ...g,
-        ledPin: +$('ledPin').value,
         colorLeft: $('colorLeft').value,
         colorRight: $('colorRight').value,
         colorOther: $('colorOther').value,
         chLeft: +$('chLeft').value,
         chRight: +$('chRight').value,
-        brightness: +$('brightness').value
+        brightness: +$('brightness').value,
+        ledPin: +$('ledPin').value,
+        micEnabled: $('micEnabled').checked,
+        micGain: +$('micGain').value,
+        micThreshold: +$('micThreshold').value,
+        micSck: +$('micSck').value,
+        micWs: +$('micWs').value,
+        micSd: +$('micSd').value
     };
     try {
         const r = await api('/api/config', body);
@@ -605,6 +687,70 @@ function uploadFw() {
     xhr.send(fd);
 }
 
+function fillPinSelect(sel, pins) {
+    pins.forEach(p => {
+        const o = document.createElement('option');
+        o.value = p;
+        o.textContent = 'GPIO ' + p;
+        sel.appendChild(o);
+    });
+}
+
+function micUpdate(s) {
+    micRunning = !!s.running;
+    if (!s.running) {
+        $('micFill').style.width = '0';
+        $('micInfo').textContent = 'Microphone inactive (enable it, save, then reboot)';
+        $('micNote').textContent = '—';
+        return;
+    }
+    const pct = Math.max(0, Math.min(100, (s.level + 60) / 60 * 100));
+    $('micFill').style.width = pct.toFixed(0) + '%';
+    $('micInfo').textContent = 'level ' + s.level + ' dB — noise floor ' + s.noise + ' dB — calibrated notes: ' + s.calCount;
+    $('micNote').textContent = (s.note >= 0 && s.age < 1500) ? s.name + '  (' + s.freq + ' Hz, ' + (s.cents >= 0 ? '+' : '') + s.cents + ' cents)' : '—';
+}
+
+async function pollMic() {
+    if (!$('micEnabled').checked) return;
+    try { micUpdate(await api('/api/mic/status')); } catch (e) {}
+}
+setInterval(pollMic, 400);
+
+async function calCapture(n, timeout) {
+    await api('/api/mic/cal', { note: n });
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) {
+        await new Promise(r => setTimeout(r, 250));
+        const s = await api('/api/mic/status');
+        micUpdate(s);
+        if (s.cal && s.cal.done && s.cal.note == n) return s.cal;
+    }
+    await api('/api/mic/cal', { note: -1 });
+    return null;
+}
+
+async function calCaptureOne() {
+    if (calBusy) return;
+    if (!micRunning) return msg('Microphone inactive');
+    calBusy = true;
+    const n = +$('calNote').value;
+    try {
+        $('calInfo').textContent = 'Play ' + noteName(n) + ' now...';
+        const r = await calCapture(n, 12000);
+        $('calInfo').textContent = r ? noteName(n) + ' captured: ' + r.freq + ' Hz (' + (r.cents >= 0 ? '+' : '') + r.cents + ' cents)' : 'Timeout — no strike detected';
+    } catch (e) {
+        $('calInfo').textContent = 'Network error';
+    }
+    calBusy = false;
+}
+
+async function calClearAll() {
+    try {
+        await api('/api/mic/cal', { clear: true });
+        $('calInfo').textContent = 'Calibration cleared';
+    } catch (e) {}
+}
+
 function status(s) {
     $('chipWifi').textContent = (s.mode == 'ap' ? 'AP ' : 'WiFi ') + s.ip;
     $('chipWifi').className = 'chip' + (s.mode == 'sta' ? ' on' : '');
@@ -615,13 +761,17 @@ function status(s) {
 }
 
 async function load() {
-    const sel = $('ledPin');
-    PINS.forEach(p => {
+    fillPinSelect($('ledPin'), LED_PINS);
+    fillPinSelect($('micSck'), LED_PINS);
+    fillPinSelect($('micWs'), LED_PINS);
+    fillPinSelect($('micSd'), MIC_PINS);
+    for (let n = 36; n <= 96; n++) {
         const o = document.createElement('option');
-        o.value = p;
-        o.textContent = 'GPIO ' + p;
-        sel.appendChild(o);
-    });
+        o.value = n;
+        o.textContent = 'MIDI ' + n + ' (' + noteName(n) + ')';
+        $('calNote').appendChild(o);
+    }
+    $('calNote').value = 60;
     try {
         const c = await api('/api/config');
         $('keyCount').value = c.keyCount;
@@ -629,7 +779,7 @@ async function load() {
         $('ledsPerKey').value = c.ledsPerKey;
         $('ledOffset').value = c.ledOffset;
         $('reversed').checked = c.reversed;
-        sel.value = c.ledPin;
+        $('ledPin').value = c.ledPin;
         $('colorLeft').value = c.colorLeft;
         $('colorRight').value = c.colorRight;
         $('colorOther').value = c.colorOther;
@@ -637,7 +787,16 @@ async function load() {
         $('chRight').value = c.chRight;
         $('brightness').value = c.brightness;
         $('briVal').textContent = c.brightness;
+        $('micEnabled').checked = !!c.micEnabled;
+        $('micGain').value = c.micGain;
+        $('micGainVal').textContent = c.micGain;
+        $('micThreshold').value = c.micThreshold;
+        $('micThVal').textContent = c.micThreshold;
+        $('micSck').value = c.micSck;
+        $('micWs').value = c.micWs;
+        $('micSd').value = c.micSd;
         $('ssid').value = c.ssid || '';
+        micRunning = !!c.status.mic;
         status(c.status);
     } catch (e) {
         msg('Could not load the configuration');
