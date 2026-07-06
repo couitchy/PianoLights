@@ -73,8 +73,8 @@ struct Config {
   uint8_t  brightness  = 100;      // global brightness (5-255)
   // Microphone
   bool     micEnabled  = false;
-  uint8_t  micGain     = 16;       // digital gain (1-64)
-  uint8_t  micThreshold= 40;       // detection sensitivity (1-100)
+  uint8_t  micGain     = 20;       // digital gain (1-64)
+  uint8_t  micThreshold= 50;       // detection sensitivity (1-100)
   uint8_t  micPinSck   = 21;       // I2S bit clock (SCK/BCLK)
   uint8_t  micPinCh    = 5;        // I2S word select (WS/LRCLK)
   uint8_t  micPinData  = 26;       // I2S data (SD/DOUT)

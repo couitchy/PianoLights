@@ -10,7 +10,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Piano Lights — Configuration</title>
+    <title>Piano Lights</title>
     <style>
         :root {
             --bg: #0e0e13;
@@ -421,7 +421,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         <button onclick="calClearAll()">Clear</button>
         <span class="note" id="calInfo"></span>
     </div>
-    <p class="note" style="margin-bottom:0">Microphone's L/R pin should be grounded (left channel). Detected notes are sent over BLE/MIDI.
+    <div id="calCount" class="note" style="font-family:ui-monospace,Consolas,monospace;margin-top:4px"></div>
+    <p class="note" style="margin-bottom:0">Microphone's L/R pin should be grounded (left channel).
     Calibration measures the real tuning of the piano, note by note. Reliable range: roughly C2 to C7.</p>
 </section>
 
@@ -702,12 +703,14 @@ function micUpdate(s) {
         $('micFill').style.width = '0';
         $('micInfo').textContent = 'Microphone inactive (enable it, save, then reboot)';
         $('micNote').textContent = '—';
+        $('calCount').textContent = '';
         return;
     }
     const pct = Math.max(0, Math.min(100, (s.level + 60) / 60 * 100));
     $('micFill').style.width = pct.toFixed(0) + '%';
-    $('micInfo').textContent = 'level ' + s.level + ' dB — noise floor ' + s.noise + ' dB — calibrated notes: ' + s.calCount;
+    $('micInfo').textContent = 'level ' + s.level + ' dB — noise floor ' + s.noise + ' dB';
     $('micNote').textContent = (s.note >= 0 && s.age < 1500) ? s.name + '  (' + s.freq + ' Hz, ' + (s.cents >= 0 ? '+' : '') + s.cents + ' cents)' : '—';
+    $('calCount').textContent = 'calibrated notes: ' + s.calCount;
 }
 
 async function pollMic() {
