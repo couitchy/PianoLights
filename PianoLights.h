@@ -10,7 +10,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Piano Lights — Configuration</title>
+    <title>Piano Lights</title>
     <style>
         :root {
             --bg: #0e0e13;
@@ -33,6 +33,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         }
 
         header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: var(--bg);
             display: flex;
             align-items: center;
             gap: 14px;
@@ -278,7 +282,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 
 <main>
 <section>
-    <h2>Alignment</h2>
+    <h2>Keys alignment</h2>
     <div id="strip"></div>
     <div id="kb"></div>
     <div id="mapinfo">Click a key to light it up.</div>
@@ -323,7 +327,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </section>
 
 <section>
-    <h2>Colors</h2>
+    <h2>Keys colors</h2>
     <div class="grid">
         <div>
             <label for="colorLeft">Left hand</label>
@@ -346,19 +350,18 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </section>
 
 <section>
-    <h2>Hardware</h2>
+    <h2>LED configuration</h2>
     <div class="grid">
         <div>
             <label for="ledPin">GPIO the LED strip is connected to</label>
             <select id="ledPin"></select>
         </div>
-        <div id="reboot" style="align-self:end" hidden><button onclick="reboot()">Reboot</button></div>
     </div>
     <p class="note" style="margin-bottom:0">Changing the GPIO requires a reboot.</p>
 </section>
 
 <section>
-    <h2>WiFi</h2>
+    <h2>WiFi settings</h2>
     <div class="grid">
         <div>
             <label for="ssid">Network (SSID)</label>
@@ -374,7 +377,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </section>
 
 <section>
-    <h2>Update</h2>
+    <h2>Firmware update</h2>
     <div class="row">
         <input id="fw" type="file" accept=".bin">
         <button id="fwBtn" onclick="uploadFw()">Send</button>
@@ -390,14 +393,15 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <footer>
     <button class="primary" onclick="save()">Save preferences</button>
     <span id="msg"></span>
+    <button id="reboot" class="primary" onclick="reboot()" style="margin-left:auto" hidden>Reboot</button>
 </footer>
 
 <script>
 const $ = i => document.getElementById(i);
-const PINS = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
-const BLACK = [1, 3, 6, 8, 10];
-const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-let on = {};           // MIDI note -> channel (local test state)
+const LED_PINS = [5, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+const KEYS_BLACK = [1, 3, 6, 8, 10];
+const KEYS_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+let on = {};
 
 function api(p, b) {
     return fetch(p, b ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) } : undefined).then(r => r.json());
@@ -414,7 +418,7 @@ function geo() {
 }
 
 function noteName(n) {
-    return NAMES[n % 12] + (Math.floor(n / 12) - 1);
+    return KEYS_NAMES[n % 12] + (Math.floor(n / 12) - 1);
 }
 
 function numLeds(g) {
@@ -425,7 +429,7 @@ function mapNote(n, g) {
     const i = n - g.firstNote, N = numLeds(g);
     let s = Math.round(i * g.ledsPerKey), e = Math.round((i + 1) * g.ledsPerKey);
     if (e <= s) e = s + 1;
-    if (BLACK.includes(n % 12)) {
+    if (KEYS_BLACK.includes(n % 12)) {
         let half = Math.floor((e - s) / 2);
         if (half < 1) half = 1;
         if (i < Math.floor(g.keyCount / 2))
@@ -463,13 +467,13 @@ function buildKb() {
     const g = geo(), kb = $('kb');
     kb.innerHTML = '';
     let whites = 0;
-    for (let i = 0; i < g.keyCount; i++) if (!BLACK.includes((g.firstNote + i) % 12)) whites++;
+    for (let i = 0; i < g.keyCount; i++) if (!KEYS_BLACK.includes((g.firstNote + i) % 12)) whites++;
     const ww = 100 / Math.max(1, whites);
     let wi = 0;
     for (let i = 0; i < g.keyCount; i++) {
         const n = g.firstNote + i, d = document.createElement('div');
         d.dataset.note = n;
-        if (!BLACK.includes(n % 12)) {
+        if (!KEYS_BLACK.includes(n % 12)) {
             d.className = 'wk';
             d.style.width = ww + '%';
             wi++;
@@ -538,13 +542,13 @@ async function save() {
     const g = geo();
     const body = {
         ...g,
-        ledPin: +$('ledPin').value,
         colorLeft: $('colorLeft').value,
         colorRight: $('colorRight').value,
         colorOther: $('colorOther').value,
         chLeft: +$('chLeft').value,
         chRight: +$('chRight').value,
-        brightness: +$('brightness').value
+        brightness: +$('brightness').value,
+        ledPin: +$('ledPin').value
     };
     try {
         const r = await api('/api/config', body);
@@ -615,12 +619,11 @@ function status(s) {
 }
 
 async function load() {
-    const sel = $('ledPin');
-    PINS.forEach(p => {
+    LED_PINS.forEach(p => {
         const o = document.createElement('option');
         o.value = p;
         o.textContent = 'GPIO ' + p;
-        sel.appendChild(o);
+        $('ledPin').appendChild(o);
     });
     try {
         const c = await api('/api/config');
@@ -629,7 +632,7 @@ async function load() {
         $('ledsPerKey').value = c.ledsPerKey;
         $('ledOffset').value = c.ledOffset;
         $('reversed').checked = c.reversed;
-        sel.value = c.ledPin;
+        $('ledPin').value = c.ledPin;
         $('colorLeft').value = c.colorLeft;
         $('colorRight').value = c.colorRight;
         $('colorOther').value = c.colorOther;

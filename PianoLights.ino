@@ -48,7 +48,7 @@
 #define LED_FRAME_INTERVAL_MS   15                  // ~60 fps max
 
 // Allowed pins for the LED strip (strapping, flash and input-only pins are excluded)
-static const uint8_t LED_PIN_WHITELIST[] = {16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+static const uint8_t LED_PIN_WHITELIST[] = {5, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
 
 // -----------
 // Preferences
