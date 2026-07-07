@@ -332,14 +332,17 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         <div>
             <label for="colorLeft">Left hand</label>
             <div class="row"><input id="colorLeft" type="color" onchange="paintAll()"><span class="note">channel</span><input id="chLeft" type="number" min="1" max="16" style="width:64px"></div>
+            <label class="fxtoggle"><input id="fxLeft" type="checkbox" onchange="paintAll()"> VFX</label>
         </div>
         <div>
             <label for="colorRight">Right hand</label>
             <div class="row"><input id="colorRight" type="color" onchange="paintAll()"><span class="note">channel</span><input id="chRight" type="number" min="1" max="16" style="width:64px"></div>
+            <label class="fxtoggle"><input id="fxRight" type="checkbox" onchange="paintAll()"> VFX</label>
         </div>
         <div>
             <label for="colorOther">Other</label>
             <div class="row"><input id="colorOther" type="color" onchange="paintAll()"></div>
+            <label class="fxtoggle"><input id="fxOther" type="checkbox" onchange="paintAll()"> VFX</label>
         </div>
         <div>
             <label for="brightness">Brightness (<span id="briVal">—</span>)</label>
@@ -398,7 +401,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 
 <script>
 const $ = i => document.getElementById(i);
-const LED_PINS = [5, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+const LED_PINS = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
 const KEYS_BLACK = [1, 3, 6, 8, 10];
 const KEYS_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 let on = {};
@@ -545,6 +548,9 @@ async function save() {
         colorLeft: $('colorLeft').value,
         colorRight: $('colorRight').value,
         colorOther: $('colorOther').value,
+        fxLeft: $('fxLeft').checked,
+        fxRight: $('fxRight').checked,
+        fxOther: $('fxOther').checked,
         chLeft: +$('chLeft').value,
         chRight: +$('chRight').value,
         brightness: +$('brightness').value,
@@ -636,6 +642,9 @@ async function load() {
         $('colorLeft').value = c.colorLeft;
         $('colorRight').value = c.colorRight;
         $('colorOther').value = c.colorOther;
+        $('fxLeft').checked = !!c.fxLeft;
+        $('fxRight').checked = !!c.fxRight;
+        $('fxOther').checked = !!c.fxOther;
         $('chLeft').value = c.chLeft;
         $('chRight').value = c.chRight;
         $('brightness').value = c.brightness;

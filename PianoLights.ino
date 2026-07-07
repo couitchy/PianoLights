@@ -38,7 +38,7 @@
 // ---------
 // Constants
 // ---------
-#define FW_VERSION              "1.2"
+#define FW_VERSION              "1.4"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // AP-mode SSID
@@ -48,7 +48,7 @@
 #define LED_FRAME_INTERVAL_MS   15                  // ~60 fps max
 
 // Allowed pins for the LED strip (strapping, flash and input-only pins are excluded)
-static const uint8_t LED_PIN_WHITELIST[] = {5, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+static const uint8_t LED_PIN_WHITELIST[] = {16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
 
 // -----------
 // Preferences
@@ -68,6 +68,10 @@ struct Config {
   uint8_t  chLeft      = 1;        // left-hand MIDI channel (1-16)
   uint8_t  chRight     = 2;        // right-hand MIDI channel (1-16)
   uint8_t  brightness  = 100;      // global brightness (5-255)
+  // Visual effects
+  bool     fxLeft      = false;    // visual effects for left hand
+  bool     fxRight     = false;    // visual effects for right hand
+  bool     fxOther     = false;    // visual effects for any other channel
   // WiFi
   char     ssid[33]    = "";
   char     pass[65]    = "";
@@ -86,6 +90,7 @@ AsyncWebServer    server(80);
 
 volatile uint8_t  noteChan[128] = {0};    // 0 = off, otherwise MIDI channel 1-16
 volatile bool     ledsDirty     = true;
+bool              fxAnimating   = false;  // true while at least one FX note is lit
 volatile bool     bleConnected  = false;
 volatile bool     otaInProgress = false;  // freezes LED rendering while writing to flash
 
@@ -111,6 +116,9 @@ void loadConfig() {
   cfg.chLeft      = prefs.getUChar("chl",  cfg.chLeft);
   cfg.chRight     = prefs.getUChar("chr",  cfg.chRight);
   cfg.brightness  = prefs.getUChar("bri",  cfg.brightness);
+  cfg.fxLeft      = prefs.getBool("fxl",   cfg.fxLeft);
+  cfg.fxRight     = prefs.getBool("fxr",   cfg.fxRight);
+  cfg.fxOther     = prefs.getBool("fxo",   cfg.fxOther);
   prefs.getString("ssid", cfg.ssid, sizeof(cfg.ssid));
   prefs.getString("pass", cfg.pass, sizeof(cfg.pass));
   prefs.end();
@@ -130,6 +138,9 @@ void saveConfig() {
   prefs.putUChar("chl",   cfg.chLeft);
   prefs.putUChar("chr",   cfg.chRight);
   prefs.putUChar("bri",   cfg.brightness);
+  prefs.putBool ("fxl",   cfg.fxLeft);
+  prefs.putBool ("fxr",   cfg.fxRight);
+  prefs.putBool ("fxo",   cfg.fxOther);
   prefs.putString("ssid", cfg.ssid);
   prefs.putString("pass", cfg.pass);
   prefs.end();
@@ -170,6 +181,12 @@ CRGB colorForChannel(uint8_t ch) {
   return CRGB(cfg.colorOther);
 }
 
+bool fxForChannel(uint8_t ch) {
+  if (ch == cfg.chLeft)  return cfg.fxLeft;
+  if (ch == cfg.chRight) return cfg.fxRight;
+  return cfg.fxOther;
+}
+
 bool isBlackKey(uint8_t note) {
   switch (note % 12) {
     case 1:
@@ -183,12 +200,46 @@ bool isBlackKey(uint8_t note) {
   }
 }
 
-// Syncs the strip state with the note state
-void renderLeds() {
+// Shimmering glow at the note position and symmetric gradient spilling over the adjacent keys
+void plotFxNote(uint8_t note, int start, int end, const CRGB &c, uint16_t n, uint32_t t) {
+  const CHSV  base   = rgb2hsv_approximate(c);
+  const float center = (start + end - 1) * 0.5f;
+  const float halo   = max(1.5f, cfg.ledsPerKey * 1.5f);  // reaches the adjacent keys
+
+  const int lo = (int)floorf(center - halo);
+  const int hi = (int)ceilf(center + halo);
+  for (int i = lo; i <= hi; i++) {
+    int led = i + cfg.ledOffset;
+    if (led < 0 || led >= (int)n) continue;
+
+    float d = fabsf((float)i - center) / (halo + 0.5f);
+    if (d >= 1.0f) continue;
+    const uint8_t fall = (uint8_t)(255.0f * (1.0f - d) * (1.0f - d));
+
+    const uint8_t sh  = sin8((uint8_t)(t / 3) + (uint8_t)(i * 37) + (uint8_t)(note * 11));
+    const uint8_t val = scale8(fall, 140 + scale8(sh, 115));
+
+    const int8_t hueShift = (int8_t)(((int)sin8((uint8_t)(t / 9) + (uint8_t)(i * 23)) - 128) / 8);
+
+    uint8_t sat = base.s;
+    if (d < 0.25f) sat = scale8(sat, 200);
+
+    CHSV hsv((uint8_t)(base.h + hueShift), sat, val);
+    if (cfg.reversed) led = n - 1 - led;
+    leds[led] += CRGB(hsv);  // saturating add blends overlapping halos
+  }
+}
+
+// Syncs the strip state with the note state.
+// Returns true if at least one animated (FX) note is lit, so the caller keeps rendering.
+bool renderLeds() {
   const uint16_t n = activeNumLeds();
   fill_solid(leds, LED_MAX_COUNT, CRGB::Black);
 
-  const int lastNote = min(127, cfg.firstNote + cfg.keyCount - 1);
+  bool           animating = false;
+  const uint32_t t         = millis();
+  const int      lastNote  = min(127, cfg.firstNote + cfg.keyCount - 1);
+
   for (int note = cfg.firstNote; note <= lastNote; note++) {
     const uint8_t ch = noteChan[note];
     if (!ch) continue;
@@ -208,6 +259,13 @@ void renderLeds() {
     }
 
     const CRGB c = colorForChannel(ch);
+
+    if (fxForChannel(ch)) {
+      animating = true;
+      plotFxNote(note, start, end, c, n, t);
+      continue;
+    }
+
     for (int i = start; i < end; i++) {
       int led = i + cfg.ledOffset;
       if (led < 0 || led >= (int)n) continue;
@@ -215,6 +273,7 @@ void renderLeds() {
       leds[led] = c;
     }
   }
+  return animating;
 }
 
 void bootAnimation() {
@@ -394,6 +453,9 @@ void sendConfigJson(AsyncWebServerRequest *req) {
   doc["colorLeft"]   = colorToHex(cfg.colorLeft);
   doc["colorRight"]  = colorToHex(cfg.colorRight);
   doc["colorOther"]  = colorToHex(cfg.colorOther);
+  doc["fxLeft"]      = cfg.fxLeft;
+  doc["fxRight"]     = cfg.fxRight;
+  doc["fxOther"]     = cfg.fxOther;
   doc["chLeft"]      = cfg.chLeft;
   doc["chRight"]     = cfg.chRight;
   doc["brightness"]  = cfg.brightness;
@@ -428,6 +490,9 @@ void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
   if (o["chRight"].is<int>())             cfg.chRight     = constrain((int)o["chRight"], 1, 16);
   if (o["brightness"].is<int>())          cfg.brightness  = constrain((int)o["brightness"], 5, 255);
   if (o["reversed"].is<bool>())           cfg.reversed    = o["reversed"];
+  if (o["fxLeft"].is<bool>())             cfg.fxLeft      = o["fxLeft"];
+  if (o["fxRight"].is<bool>())            cfg.fxRight     = o["fxRight"];
+  if (o["fxOther"].is<bool>())            cfg.fxOther     = o["fxOther"];
   if (o["ledPin"].is<int>() && isValidLedPin(o["ledPin"])) cfg.ledPin = o["ledPin"];
 
   saveConfig();
@@ -526,9 +591,9 @@ void loop() {
   maintainWifi();
 
   // LED rendering
-  if (!otaInProgress && ledsDirty && millis() - lastShow >= LED_FRAME_INTERVAL_MS) {
+  if (!otaInProgress && (ledsDirty || fxAnimating) && millis() - lastShow >= LED_FRAME_INTERVAL_MS) {
     ledsDirty = false;
-    renderLeds();
+    fxAnimating = renderLeds();
     FastLED.show();
     lastShow = millis();
   }
