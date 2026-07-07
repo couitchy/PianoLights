@@ -121,7 +121,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             font: inherit;
         }
 
-        #ledPin {
+        #ledPin,
+        #relayPin {
             max-width: 370px;
         }
 
@@ -359,8 +360,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             <label for="ledPin">GPIO the LED strip is connected to</label>
             <select id="ledPin"></select>
         </div>
+        <div>
+            <label for="relayPin">GPIO the power relay is connected to</label>
+            <select id="relayPin"></select>
+        </div>
     </div>
-    <p class="note" style="margin-bottom:0">Changing the GPIO requires a reboot.</p>
+    <p class="note" style="margin-bottom:0">Changing a GPIO requires a reboot. Select "Unused" if the LED strip is powered unconditionally.</p>
 </section>
 
 <section>
@@ -402,6 +407,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <script>
 const $ = i => document.getElementById(i);
 const LED_PINS = [16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+const RELAY_PINS = [-1, 12, 13, 14];
 const KEYS_BLACK = [1, 3, 6, 8, 10];
 const KEYS_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 let on = {};
@@ -554,7 +560,8 @@ async function save() {
         chLeft: +$('chLeft').value,
         chRight: +$('chRight').value,
         brightness: +$('brightness').value,
-        ledPin: +$('ledPin').value
+        ledPin: +$('ledPin').value,
+        relayPin: +$('relayPin').value
     };
     try {
         const r = await api('/api/config', body);
@@ -631,6 +638,12 @@ async function load() {
         o.textContent = 'GPIO ' + p;
         $('ledPin').appendChild(o);
     });
+    RELAY_PINS.forEach(p => {
+        const o = document.createElement('option');
+        o.value = p;
+        o.textContent = p < 0 ? 'Unused' : 'GPIO ' + p;
+        $('relayPin').appendChild(o);
+    });
     try {
         const c = await api('/api/config');
         $('keyCount').value = c.keyCount;
@@ -639,6 +652,7 @@ async function load() {
         $('ledOffset').value = c.ledOffset;
         $('reversed').checked = c.reversed;
         $('ledPin').value = c.ledPin;
+        $('relayPin').value = c.relayPin;
         $('colorLeft').value = c.colorLeft;
         $('colorRight').value = c.colorRight;
         $('colorOther').value = c.colorOther;

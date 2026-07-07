@@ -38,7 +38,7 @@
 // ---------
 // Constants
 // ---------
-#define FW_VERSION              "1.4"
+#define FW_VERSION              "1.5"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // AP-mode SSID
@@ -47,8 +47,9 @@
 #define LED_MAX_COUNT           300                 // max allocated buffer
 #define LED_FRAME_INTERVAL_MS   15                  // ~60 fps max
 
-// Allowed pins for the LED strip (strapping, flash and input-only pins are excluded)
+// Allowed pins for the LED strip (strapping, flash and input-only pins are excluded) and the power relay
 static const uint8_t LED_PIN_WHITELIST[] = {16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+static const int8_t RELAY_PIN_WHITELIST[] = {-1, 12, 13, 14};
 
 // -----------
 // Preferences
@@ -61,6 +62,7 @@ struct Config {
   int16_t  ledOffset   = 0;        // index of the 1st usable LED
   bool     reversed    = false;    // strip direction
   uint8_t  ledPin      = 16;       // data GPIO (reboot required)
+  int8_t   relayPin    = -1;       // power relay GPIO (reboot required)
   // Colors
   uint32_t colorLeft   = 0x00A0FF; // left hand
   uint32_t colorRight  = 0xFF4000; // right hand
@@ -110,6 +112,7 @@ void loadConfig() {
   cfg.ledOffset   = prefs.getShort("off",  cfg.ledOffset);
   cfg.reversed    = prefs.getBool("rev",   cfg.reversed);
   cfg.ledPin      = prefs.getUChar("pin",  cfg.ledPin);
+  cfg.relayPin    = prefs.getChar("rpin",  cfg.relayPin);
   cfg.colorLeft   = prefs.getUInt("cl",    cfg.colorLeft);
   cfg.colorRight  = prefs.getUInt("cr",    cfg.colorRight);
   cfg.colorOther  = prefs.getUInt("co",    cfg.colorOther);
@@ -132,6 +135,7 @@ void saveConfig() {
   prefs.putShort("off",   cfg.ledOffset);
   prefs.putBool ("rev",   cfg.reversed);
   prefs.putUChar("pin",   cfg.ledPin);
+  prefs.putChar ("rpin",  cfg.relayPin);
   prefs.putUInt ("cl",    cfg.colorLeft);
   prefs.putUInt ("cr",    cfg.colorRight);
   prefs.putUInt ("co",    cfg.colorOther);
@@ -149,6 +153,21 @@ void saveConfig() {
 // ------------
 // LED handling
 // ------------
+bool isValidRelayPin(int8_t pin) {
+  for (int8_t p : RELAY_PIN_WHITELIST)
+    if (p == pin)
+      return true;
+  return false;
+}
+
+void setupPower() {
+  if (!isValidRelayPin(cfg.relayPin)) cfg.relayPin = -1;
+  if (cfg.relayPin < 0) return;
+  digitalWrite(cfg.relayPin, LOW);
+  pinMode(cfg.relayPin, OUTPUT);
+  digitalWrite(cfg.relayPin, HIGH);
+}
+
 bool isValidLedPin(uint8_t pin) {
   for (uint8_t p : LED_PIN_WHITELIST)
     if (p == pin)
@@ -450,6 +469,7 @@ void sendConfigJson(AsyncWebServerRequest *req) {
   doc["ledOffset"]   = cfg.ledOffset;
   doc["reversed"]    = cfg.reversed;
   doc["ledPin"]      = cfg.ledPin;
+  doc["relayPin"]    = cfg.relayPin;    // -1 = no relay
   doc["colorLeft"]   = colorToHex(cfg.colorLeft);
   doc["colorRight"]  = colorToHex(cfg.colorRight);
   doc["colorOther"]  = colorToHex(cfg.colorOther);
@@ -459,7 +479,7 @@ void sendConfigJson(AsyncWebServerRequest *req) {
   doc["chLeft"]      = cfg.chLeft;
   doc["chRight"]     = cfg.chRight;
   doc["brightness"]  = cfg.brightness;
-  doc["ssid"]        = cfg.ssid;  // the password is never returned
+  doc["ssid"]        = cfg.ssid;        // the password is never returned
 
   JsonObject st  = doc["status"].to<JsonObject>();
   st["mode"]     = apMode ? "ap" : "sta";
@@ -477,7 +497,8 @@ void sendConfigJson(AsyncWebServerRequest *req) {
 
 void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
   JsonObject o = json.as<JsonObject>();
-  const uint8_t oldPin = cfg.ledPin;
+  const uint8_t oldLed   = cfg.ledPin;
+  const int8_t  oldRelay = cfg.relayPin;
 
   if (o["colorLeft"].is<const char*>())   cfg.colorLeft   = hexToColor(o["colorLeft"]);
   if (o["colorRight"].is<const char*>())  cfg.colorRight  = hexToColor(o["colorRight"]);
@@ -494,6 +515,7 @@ void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
   if (o["fxRight"].is<bool>())            cfg.fxRight     = o["fxRight"];
   if (o["fxOther"].is<bool>())            cfg.fxOther     = o["fxOther"];
   if (o["ledPin"].is<int>() && isValidLedPin(o["ledPin"])) cfg.ledPin = o["ledPin"];
+  if (o["relayPin"].is<int>() && isValidRelayPin(o["relayPin"])) cfg.relayPin = o["relayPin"];
 
   saveConfig();
   FastLED.setBrightness(cfg.brightness);
@@ -501,7 +523,7 @@ void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
 
   JsonDocument res;
   res["ok"]          = true;
-  res["needsReboot"] = (cfg.ledPin != oldPin);
+  res["needsReboot"] = (cfg.ledPin != oldLed) || (cfg.relayPin != oldRelay);
   res["numLeds"]     = activeNumLeds();
   String out;
   serializeJson(res, out);
@@ -572,6 +594,7 @@ void setup() {
   Serial.println("\nPianoLights " FW_VERSION);
 
   loadConfig();
+  setupPower();
   setupLeds();
   bootAnimation();
 
