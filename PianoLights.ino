@@ -3,8 +3,9 @@
  *  PianoLights.ino, a BLE/MIDI bridge between Synthesia and a LED strip
  * ==================================================================================================
  *  Target     : ESP32 WROOM ("ESP32 Dev Module")
- *  Role       : BLE/MIDI peripheral (seen as a MIDI output by Synthesia on Windows)
+ *  Role       : BLE/MIDI peripheral (seen as a MIDI output/input by Synthesia on Windows)
  *  Control    : Incoming notes drive a WS2812B LED strip to show which keys to play
+ *  Feedback   : An INMP441 mic listens to an acoustic piano and reports the notes actually played
  *  Config     : Embedded web page (WiFi STA with automatic AP fallback), preferences stored in NVS
  *
  *  Libraries required under the Arduino IDE:
@@ -34,11 +35,12 @@
 #include <hardware/BLEMIDI_ESP32_NimBLE.h>
 
 #include "PianoLights.h"
+#include "PianoLightsMic.h"
 
 // ---------
 // Constants
 // ---------
-#define FW_VERSION              "1.5"
+#define FW_VERSION              "1.6"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // AP-mode SSID
@@ -47,8 +49,9 @@
 #define LED_MAX_COUNT           300                 // max allocated buffer
 #define LED_FRAME_INTERVAL_MS   15                  // ~60 fps max
 
-// Allowed pins for the LED strip (strapping, flash and input-only pins are excluded) and the power relay
+// Allowed pins for the LED strip (strapping, flash and input-only pins are excluded), the microphone and the power relay
 static const uint8_t LED_PIN_WHITELIST[] = {16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+static const uint8_t MIC_PIN_WHITELIST[] = {5, 34, 35, 36, 39};
 static const int8_t RELAY_PIN_WHITELIST[] = {-1, 12, 13, 14};
 
 // -----------
@@ -58,7 +61,7 @@ struct Config {
   // Geometry
   uint8_t  keyCount    = 88;       // number of keyboard keys
   uint8_t  firstNote   = 21;       // MIDI note of the 1st key (21 = A0)
-  float    ledsPerKey  = 2.0f;     // LEDs-per-key ratio (float, fine-tunable)
+  float    ledsPerKey  = 2.0f;     // LEDs-per-key ratio
   int16_t  ledOffset   = 0;        // index of the 1st usable LED
   bool     reversed    = false;    // strip direction
   uint8_t  ledPin      = 16;       // data GPIO (reboot required)
@@ -74,6 +77,13 @@ struct Config {
   bool     fxLeft      = false;    // visual effects for left hand
   bool     fxRight     = false;    // visual effects for right hand
   bool     fxOther     = false;    // visual effects for any other channel
+  // Microphone
+  bool     micEnabled  = false;
+  uint8_t  micGain     = 20;       // digital gain (1-64)
+  uint8_t  micThreshold= 50;       // detection sensitivity (1-100)
+  uint8_t  micPinSck   = 21;       // I2S bit clock (SCK/BCLK)
+  uint8_t  micPinCh    = 5;        // I2S word select (WS/LRCLK)
+  uint8_t  micPinData  = 26;       // I2S data (SD/DOUT)
   // WiFi
   char     ssid[33]    = "";
   char     pass[65]    = "";
@@ -122,6 +132,12 @@ void loadConfig() {
   cfg.fxLeft      = prefs.getBool("fxl",   cfg.fxLeft);
   cfg.fxRight     = prefs.getBool("fxr",   cfg.fxRight);
   cfg.fxOther     = prefs.getBool("fxo",   cfg.fxOther);
+  cfg.micEnabled  = prefs.getBool ("men",  cfg.micEnabled);
+  cfg.micGain     = prefs.getUChar("mgn",  cfg.micGain);
+  cfg.micThreshold= prefs.getUChar("mth",  cfg.micThreshold);
+  cfg.micPinSck   = prefs.getUChar("msck", cfg.micPinSck);
+  cfg.micPinCh    = prefs.getUChar("mws",  cfg.micPinCh);
+  cfg.micPinData  = prefs.getUChar("msd",  cfg.micPinData);
   prefs.getString("ssid", cfg.ssid, sizeof(cfg.ssid));
   prefs.getString("pass", cfg.pass, sizeof(cfg.pass));
   prefs.end();
@@ -145,6 +161,12 @@ void saveConfig() {
   prefs.putBool ("fxl",   cfg.fxLeft);
   prefs.putBool ("fxr",   cfg.fxRight);
   prefs.putBool ("fxo",   cfg.fxOther);
+  prefs.putBool ("men",   cfg.micEnabled);
+  prefs.putUChar("mgn",   cfg.micGain);
+  prefs.putUChar("mth",   cfg.micThreshold);
+  prefs.putUChar("msck",  cfg.micPinSck);
+  prefs.putUChar("mws",   cfg.micPinCh);
+  prefs.putUChar("msd",   cfg.micPinData);
   prefs.putString("ssid", cfg.ssid);
   prefs.putString("pass", cfg.pass);
   prefs.end();
@@ -322,6 +344,12 @@ void bootAnimation() {
 // -------------
 // MIDI handling
 // -------------
+static const char *NOTE_NAMES[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+String midiNoteName(int n) {
+  if (n < 0 || n > 127) return "-";
+  return String(NOTE_NAMES[n % 12]) + String(n / 12 - 1);
+}
+
 void onNoteOn(byte channel, byte note, byte velocity) {
   Serial.printf("[MIDI] NoteOn  ch=%u note=%u vel=%u\n", channel, note, velocity);
   noteChan[note] = (velocity == 0 ? 0 : channel);
@@ -354,6 +382,56 @@ void setupBleMidi() {
   Serial.printf("[BLE] Device \"%s\" waiting for pairing\n", BLE_DEVICE_NAME);
 }
 
+// -------------------
+// Microphone handling
+// -------------------
+bool isValidMicPin(uint8_t pin) {
+  if (isValidLedPin(pin)) return true;
+  for (uint8_t p : MIC_PIN_WHITELIST)
+    if (p == pin)
+      return true;
+  return false;
+}
+
+bool areValidMicPins() {
+  if (!isValidMicPin(cfg.micPinSck) || !isValidMicPin(cfg.micPinCh) || !isValidMicPin(cfg.micPinData))
+    return false;
+  if (cfg.micPinSck == cfg.micPinCh || cfg.micPinSck == cfg.micPinData || cfg.micPinCh == cfg.micPinData)
+    return false;
+  if (cfg.micPinSck == cfg.ledPin || cfg.micPinCh == cfg.ledPin || cfg.micPinData == cfg.ledPin)
+    return false;
+  return true;
+}
+
+void setupMic() {
+  if (!cfg.micEnabled) return;
+  if (!areValidMicPins()) {
+    Serial.println("[MIC] Invalid GPIO configuration (conflict or forbidden pin): mic disabled");
+    return;
+  }
+  if (micBegin(cfg.micPinSck, cfg.micPinCh, cfg.micPinData, noteChan)) {
+    micSetGain(cfg.micGain);
+    micSetThreshold(cfg.micThreshold);
+    Serial.printf("[MIC] Listening (SCK=%u WS=%u SD=%u, gain=%u, threshold=%u)\n", cfg.micPinSck, cfg.micPinCh, cfg.micPinData, cfg.micGain, cfg.micThreshold);
+  } else {
+    Serial.println("[MIC] Initialization failed");
+  }
+}
+
+void pumpMicEvents() {
+  if (!micRunning() || !micEvents()) return;
+  MicEvent ev;
+  while (xQueueReceive(micEvents(), &ev, 0) == pdTRUE) {
+    if (!bleConnected) continue;
+    if (ev.on) {
+      Serial.printf("[MIC] Detected note %u (vel=%u) -> NoteOn\n", ev.note, ev.velocity);
+      MIDI.sendNoteOn(ev.note, ev.velocity, 1);
+    } else {
+      MIDI.sendNoteOff(ev.note, 0, 1);
+    }
+  }
+}
+
 // -------------
 // WiFi handling
 // -------------
@@ -361,7 +439,7 @@ void startAccessPoint() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(WIFI_AP_SSID);       // open AP (for configuration)
   apMode = true;
-  Serial.printf("[WiFi] AP mode — SSID \"%s\", IP %s\n", WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
+  Serial.printf("[WiFi] AP mode: SSID \"%s\", IP %s\n", WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
 }
 
 void setupWifi() {
@@ -382,7 +460,7 @@ void setupWifi() {
     }
     if (WiFi.status() == WL_CONNECTED) {
       apMode = false;
-      Serial.printf("[WiFi] Connected — IP %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("[WiFi] Connected: IP %s\n", WiFi.localIP().toString().c_str());
     }
     else {
       Serial.println("[WiFi] STA failed -> falling back to access point");
@@ -479,6 +557,12 @@ void sendConfigJson(AsyncWebServerRequest *req) {
   doc["chLeft"]      = cfg.chLeft;
   doc["chRight"]     = cfg.chRight;
   doc["brightness"]  = cfg.brightness;
+  doc["micEnabled"]  = cfg.micEnabled;
+  doc["micGain"]     = cfg.micGain;
+  doc["micThreshold"]= cfg.micThreshold;
+  doc["micSck"]      = cfg.micPinSck;
+  doc["micWs"]       = cfg.micPinCh;
+  doc["micSd"]       = cfg.micPinData;
   doc["ssid"]        = cfg.ssid;        // the password is never returned
 
   JsonObject st  = doc["status"].to<JsonObject>();
@@ -487,6 +571,7 @@ void sendConfigJson(AsyncWebServerRequest *req) {
   st["ble"]      = bleConnected;
   st["bleName"]  = BLE_DEVICE_NAME;
   st["numLeds"]  = activeNumLeds();
+  st["mic"]      = micRunning();
   st["heap"]     = ESP.getFreeHeap();
   st["version"]  = FW_VERSION;
 
@@ -497,8 +582,12 @@ void sendConfigJson(AsyncWebServerRequest *req) {
 
 void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
   JsonObject o = json.as<JsonObject>();
-  const uint8_t oldLed   = cfg.ledPin;
-  const int8_t  oldRelay = cfg.relayPin;
+  const uint8_t oldLed    = cfg.ledPin;
+  const int8_t  oldRelay  = cfg.relayPin;
+  const bool    oldMicEn  = cfg.micEnabled;
+  const uint8_t oldMicSck = cfg.micPinSck;
+  const uint8_t oldMicWs  = cfg.micPinCh;
+  const uint8_t oldMicSd  = cfg.micPinData;
 
   if (o["colorLeft"].is<const char*>())   cfg.colorLeft   = hexToColor(o["colorLeft"]);
   if (o["colorRight"].is<const char*>())  cfg.colorRight  = hexToColor(o["colorRight"]);
@@ -510,20 +599,32 @@ void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
   if (o["chLeft"].is<int>())              cfg.chLeft      = constrain((int)o["chLeft"], 1, 16);
   if (o["chRight"].is<int>())             cfg.chRight     = constrain((int)o["chRight"], 1, 16);
   if (o["brightness"].is<int>())          cfg.brightness  = constrain((int)o["brightness"], 5, 255);
+  if (o["micGain"].is<int>())             cfg.micGain     = constrain((int)o["micGain"], 1, 64);
+  if (o["micThreshold"].is<int>())        cfg.micThreshold= constrain((int)o["micThreshold"], 1, 100);
   if (o["reversed"].is<bool>())           cfg.reversed    = o["reversed"];
   if (o["fxLeft"].is<bool>())             cfg.fxLeft      = o["fxLeft"];
   if (o["fxRight"].is<bool>())            cfg.fxRight     = o["fxRight"];
   if (o["fxOther"].is<bool>())            cfg.fxOther     = o["fxOther"];
-  if (o["ledPin"].is<int>() && isValidLedPin(o["ledPin"])) cfg.ledPin = o["ledPin"];
+  if (o["micEnabled"].is<bool>())         cfg.micEnabled  = o["micEnabled"];
   if (o["relayPin"].is<int>() && isValidRelayPin(o["relayPin"])) cfg.relayPin = o["relayPin"];
+  if (o["ledPin"].is<int>() && isValidLedPin(o["ledPin"])) cfg.ledPin     = o["ledPin"];
+  if (o["micSck"].is<int>() && isValidMicPin(o["micSck"])) cfg.micPinSck  = o["micSck"];
+  if (o["micWs"].is<int>()  && isValidMicPin(o["micWs"]))  cfg.micPinCh   = o["micWs"];
+  if (o["micSd"].is<int>()  && isValidMicPin(o["micSd"]))  cfg.micPinData = o["micSd"];
 
   saveConfig();
-  FastLED.setBrightness(cfg.brightness);
   ledsDirty = true;
+  FastLED.setBrightness(cfg.brightness);
+  if (micRunning()) {
+    micSetGain(cfg.micGain);
+    micSetThreshold(cfg.micThreshold);
+    Serial.printf("[MIC] New parameters applied (gain=%u, threshold=%u)\n", cfg.micGain, cfg.micThreshold);
+  }
 
   JsonDocument res;
   res["ok"]          = true;
-  res["needsReboot"] = (cfg.ledPin != oldLed) || (cfg.relayPin != oldRelay);
+  res["needsReboot"] = (cfg.ledPin != oldLed) || (cfg.relayPin != oldRelay) || (cfg.micEnabled != oldMicEn) || (cfg.micPinSck != oldMicSck) || (cfg.micPinCh != oldMicWs) || (cfg.micPinData != oldMicSd);
+  res["micPinsOk"]   = areValidMicPins();
   res["numLeds"]     = activeNumLeds();
   String out;
   serializeJson(res, out);
@@ -555,15 +656,81 @@ void handleWifiPost(AsyncWebServerRequest *req, JsonVariant &json) {
   }
 }
 
+void sendMicStatusJson(AsyncWebServerRequest *req) {
+  JsonDocument doc;
+  doc["running"] = micRunning();
+  if (micRunning()) {
+    MicStatus s;
+    micGetStatus(s);
+    doc["level"]    = serialized(String(s.levelDb, 1));
+    doc["noise"]    = serialized(String(s.noiseDb, 1));
+    doc["note"]     = s.lastNote;
+    doc["name"]     = midiNoteName(s.lastNote);
+    doc["freq"]     = serialized(String(s.lastFreq, 2));
+    doc["cents"]    = serialized(String(s.lastCents, 1));
+    doc["age"]      = s.lastMs ? (uint32_t)(millis() - s.lastMs) : 0;
+    doc["calCount"] = micCalCount();
+
+    JsonObject cal  = doc["cal"].to<JsonObject>();
+    cal["armed"]    = s.calArmed;
+    cal["note"]     = s.calNote;
+    cal["done"]     = s.calDone;
+    cal["freq"]     = serialized(String(s.calFreq, 2));
+    cal["cents"]    = serialized(String(s.calCents, 1));
+  }
+  String out;
+  serializeJson(doc, out);
+  req->send(200, "application/json", out);
+}
+
+void handleMicCalPost(AsyncWebServerRequest *req, JsonVariant &json) {
+  JsonObject o = json.as<JsonObject>();
+  if (!micRunning()) {
+    req->send(409, "application/json", "{\"ok\":false,\"error\":\"mic not running\"}");
+    return;
+  }
+  if (o["clear"].is<bool>() && (bool)o["clear"]) {
+    // {"clear": true} erases the table
+    micClearCal();
+    Serial.println("[MIC] Calibration table cleared");
+  }
+  else if (o["note"].is<int>()) {
+    // {"note": n} arms a capture on note n
+    // {"note": -1} disarms
+    micArmCal((int)o["note"]);
+  }
+  req->send(200, "application/json", "{\"ok\":true}");
+}
+
+void sendMicCalJson(AsyncWebServerRequest *req) {
+  JsonDocument doc;
+  JsonArray arr = doc["cal"].to<JsonArray>();
+  for (int n = MIC_NOTE_MIN; n <= MIC_NOTE_MAX; n++) {
+    const float f = micCalFreq(n);
+    if (f <= 0.0f) continue;
+    JsonObject e = arr.add<JsonObject>();
+    e["note"]  = n;
+    e["name"]  = midiNoteName(n);
+    e["freq"]  = serialized(String(f, 2));
+    e["cents"] = serialized(String(1200.0f * log2f(f / (440.0f * powf(2.0f, (n - 69) / 12.0f))), 1));
+  }
+  String out;
+  serializeJson(doc, out);
+  req->send(200, "application/json", out);
+}
+
 void setupWebServer() {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
     req->send_P(200, "text/html", INDEX_HTML);
   });
 
-  server.on("/api/config", HTTP_GET, sendConfigJson);
-  server.addHandler(new AsyncCallbackJsonWebHandler("/api/config", handleConfigPost));
-  server.addHandler(new AsyncCallbackJsonWebHandler("/api/test",   handleTestPost));
-  server.addHandler(new AsyncCallbackJsonWebHandler("/api/wifi",   handleWifiPost));
+  server.on("/api/config",     HTTP_GET, sendConfigJson);
+  server.on("/api/mic/status", HTTP_GET, sendMicStatusJson);
+  server.on("/api/mic/cal",    HTTP_GET, sendMicCalJson);
+  server.addHandler(new AsyncCallbackJsonWebHandler("/api/config",  handleConfigPost));
+  server.addHandler(new AsyncCallbackJsonWebHandler("/api/mic/cal", handleMicCalPost));
+  server.addHandler(new AsyncCallbackJsonWebHandler("/api/test",    handleTestPost));
+  server.addHandler(new AsyncCallbackJsonWebHandler("/api/wifi",    handleWifiPost));
 
   server.on("/api/alloff", HTTP_POST, [](AsyncWebServerRequest *req) {
     memset((void*)noteChan, 0, sizeof(noteChan));
@@ -595,12 +762,13 @@ void setup() {
 
   loadConfig();
   setupPower();
-  setupLeds();
+  setupLeds();        // WS2812B LED strip
+  setupMic();         // I2S microphone
   bootAnimation();
 
-  setupWifi();         // STA (blocking, 15 s max) then possible AP fallback
+  setupWifi();        // STA (blocking, 15 s max) then possible AP fallback
   setupWebServer();
-  setupBleMidi();      // BLE advertising
+  setupBleMidi();     // BLE advertising
 }
 
 // ---------
@@ -609,6 +777,9 @@ void setup() {
 void loop() {
   // MIDI messages
   MIDI.read();
+
+  // Microphone listening
+  pumpMicEvents();
 
   // WiFi messages
   maintainWifi();
