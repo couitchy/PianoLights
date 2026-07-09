@@ -106,11 +106,11 @@ bool              fxAnimating   = false;  // true while at least one FX note is 
 volatile bool     bleConnected  = false;
 volatile bool     powerOn       = true;   // true even if no power relay is configured
 volatile bool     otaInProgress = false;  // freezes LED rendering while writing to flash
-
-bool      apMode        = false;
-uint32_t  rebootAt      = 0;              // != 0 -> scheduled reboot
-uint32_t  lastWifiRetry = 0;
-uint32_t  lastShow      = 0;
+bool              apMode        = false;
+volatile uint32_t rebootAt      = 0;      // != 0 -> scheduled restart
+volatile uint32_t cometAt       = 0;      // != 0 -> scheduled animation
+uint32_t          lastWifiRetry = 0;
+uint32_t          lastShow      = 0;
 
 // -------------
 // Storage (NVS)
@@ -757,6 +757,7 @@ void setupWebServer() {
       return;
     }
     togglePower(!powerOn);
+    cometAt = powerOn ? millis() + 100 : 0;
     req->send(200, "application/json", powerOn ? "{\"ok\":true,\"power\":1}" : "{\"ok\":true,\"power\":0}");
   });
 
@@ -786,7 +787,7 @@ void setup() {
   setupPower();
   setupLeds();        // WS2812B LED strip
   setupMic();         // I2S microphone
-  bootAnimation();
+  bootAnimation();    // comet-like streak animation
 
   setupWifi();        // STA (blocking, 15 s max) then possible AP fallback
   setupWebServer();
@@ -807,11 +808,18 @@ void loop() {
   maintainWifi();
 
   // LED rendering
-  if (!otaInProgress && powerOn && (ledsDirty || fxAnimating) && millis() - lastShow >= LED_FRAME_INTERVAL_MS) {
+  if (!otaInProgress && !cometAt && powerOn && (ledsDirty || fxAnimating) && millis() - lastShow >= LED_FRAME_INTERVAL_MS) {
     ledsDirty = false;
     fxAnimating = renderLeds();
     FastLED.show();
     lastShow = millis();
+  }
+
+  // Pending power animation (comet)
+  if (!otaInProgress && cometAt && millis() > cometAt) {
+    cometAt = 0;
+    bootAnimation();
+    ledsDirty = true;
   }
 
   // Pending reboot

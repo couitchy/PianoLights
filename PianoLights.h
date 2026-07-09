@@ -443,7 +443,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
         <span class="note">Calibration:</span>
         <select id="calNote" style="width:auto"></select>
         <button onclick="calCaptureOne()">Capture this note</button>
-        <button onclick="calClearAll()">Clear</button>
+        <button onclick="calClearAll()">Clear all notes</button>
         <span class="note" id="calInfo"></span>
     </div>
     <div id="calCount" class="note" style="font-family:ui-monospace,Consolas,monospace;margin-top:4px"></div>
@@ -780,6 +780,7 @@ async function calCaptureOne() {
 }
 
 async function calClearAll() {
+    if (!confirm('This will erase the whole calibration table.\nAre you sure?')) return;
     try {
         await api('/api/mic/cal', { clear: true });
         $('calInfo').textContent = 'Calibration cleared';
