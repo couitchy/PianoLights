@@ -40,7 +40,7 @@
 // ---------
 // Constants
 // ---------
-#define FW_VERSION              "1.6"
+#define FW_VERSION              "1.7"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // AP-mode SSID
@@ -104,6 +104,7 @@ volatile uint8_t  noteChan[128] = {0};    // 0 = off, otherwise MIDI channel 1-1
 volatile bool     ledsDirty     = true;
 bool              fxAnimating   = false;  // true while at least one FX note is lit
 volatile bool     bleConnected  = false;
+volatile bool     powerOn       = true;   // true even if no power relay is configured
 volatile bool     otaInProgress = false;  // freezes LED rendering while writing to flash
 
 bool      apMode        = false;
@@ -188,6 +189,17 @@ void setupPower() {
   digitalWrite(cfg.relayPin, LOW);
   pinMode(cfg.relayPin, OUTPUT);
   digitalWrite(cfg.relayPin, HIGH);
+}
+
+void togglePower(bool on) {
+  if (cfg.relayPin < 0 || powerOn == on) return;
+  if (on) {
+    digitalWrite(cfg.relayPin, HIGH);
+    powerOn = true;
+  } else {
+    digitalWrite(cfg.relayPin, LOW);
+    powerOn = false;
+  }
 }
 
 bool isValidLedPin(uint8_t pin) {
@@ -571,6 +583,7 @@ void sendConfigJson(AsyncWebServerRequest *req) {
   st["ble"]      = bleConnected;
   st["bleName"]  = BLE_DEVICE_NAME;
   st["numLeds"]  = activeNumLeds();
+  st["power"]    = (cfg.relayPin < 0) ? -1 : (powerOn ? 1 : 0);
   st["mic"]      = micRunning();
   st["heap"]     = ESP.getFreeHeap();
   st["version"]  = FW_VERSION;
@@ -738,6 +751,15 @@ void setupWebServer() {
     req->send(200, "application/json", "{\"ok\":true}");
   });
 
+  server.on("/api/power", HTTP_POST, [](AsyncWebServerRequest *req) {
+    if (cfg.relayPin < 0) {
+      req->send(409, "application/json", "{\"ok\":false,\"err\":\"no power relay configured\"}");
+      return;
+    }
+    togglePower(!powerOn);
+    req->send(200, "application/json", powerOn ? "{\"ok\":true,\"power\":1}" : "{\"ok\":true,\"power\":0}");
+  });
+
   server.on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest *req) {
     rebootAt = millis() + 500;
     req->send(200, "application/json", "{\"ok\":true}");
@@ -785,7 +807,7 @@ void loop() {
   maintainWifi();
 
   // LED rendering
-  if (!otaInProgress && (ledsDirty || fxAnimating) && millis() - lastShow >= LED_FRAME_INTERVAL_MS) {
+  if (!otaInProgress && powerOn && (ledsDirty || fxAnimating) && millis() - lastShow >= LED_FRAME_INTERVAL_MS) {
     ledsDirty = false;
     fxAnimating = renderLeds();
     FastLED.show();

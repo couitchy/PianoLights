@@ -78,6 +78,14 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             border-color: var(--amber);
         }
 
+        #btnPower {
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 15px;
+            line-height: 1.4;
+            color: var(--mut);
+        }
+
         main {
             max-width: 920px;
             margin: 0 auto;
@@ -296,6 +304,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 
 <header>
     <h1>Piano<b>Lights</b></h1>
+    <button id="btnPower" title="Toggle LED strip power" style="display:none" onclick="togglePower()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2v10"/>
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+        </svg>
+    </button>
     <div id="chips">
         <span class="chip" id="chipWifi">WiFi...</span>
         <span class="chip" id="chipBle">BLE...</span>
@@ -778,7 +792,18 @@ function status(s) {
     $('chipBle').textContent = s.ble ? 'BLE connected' : 'BLE waiting';
     $('chipBle').className = 'chip' + (s.ble ? ' on' : '');
     $('chipLeds').textContent = s.numLeds + ' LEDs';
+    $('chipLeds').className = 'chip' + (s.power != 0 ? ' on' : '');
+    $('btnPower').style.display = s.power >= 0 ? '' : 'none';
     $('fwVer').textContent = 'v' + s.version;
+}
+
+async function togglePower() {
+    try {
+        const r = await api('/api/power', {});
+        $('chipLeds').className = 'chip' + (r.power ? ' on' : '');
+    } catch (e) {
+        msg('Network error');
+    }
 }
 
 async function load() {
