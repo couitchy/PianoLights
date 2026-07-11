@@ -452,6 +452,17 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </section>
 
 <section>
+    <h2>Bluetooth settings</h2>
+    <div class="grid">
+        <div>
+            <label for="bleName">Device friendly name</label>
+            <input id="bleName" type="text" maxlength="23" autocomplete="off" spellcheck="false">
+        </div>
+    </div>
+    <p class="note" style="margin-bottom:0">Changing the name requires a reboot. Windows keeps the pairing under the old name: remove the device, then pair again.</p>
+</section>
+
+<section>
     <h2>WiFi settings</h2>
     <div class="grid">
         <div>
@@ -659,7 +670,8 @@ async function save() {
         micThreshold: +$('micThreshold').value,
         micSck: +$('micSck').value,
         micWs: +$('micWs').value,
-        micSd: +$('micSd').value
+        micSd: +$('micSd').value,
+        bleName: $('bleName').value.trim()
     };
     try {
         const r = await api('/api/config', body);
@@ -848,6 +860,7 @@ async function load() {
         $('micWs').value = c.micWs;
         $('micSd').value = c.micSd;
         $('ssid').value = c.ssid || '';
+        $('bleName').value = c.bleName || '';
         micRunning = !!c.status.mic;
         status(c.status);
     } catch (e) {

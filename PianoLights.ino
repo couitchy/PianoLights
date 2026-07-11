@@ -40,12 +40,12 @@
 // ---------
 // Constants
 // ---------
-#define FW_VERSION              "1.7"
+#define FW_VERSION              "1.8"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // AP-mode SSID
 #define MDNS_HOSTNAME           "pianolights"       // access via http://pianolights.local
-#define BLE_DEVICE_NAME         "Piano-Lights"      // name shown under Windows
+#define BLE_DEVICE_NAME         "Piano-Lights"      // default name shown under Windows
 #define LED_MAX_COUNT           300                 // max allocated buffer
 #define LED_FRAME_INTERVAL_MS   15                  // ~60 fps max
 
@@ -87,6 +87,8 @@ struct Config {
   // WiFi
   char     ssid[33]    = "";
   char     pass[65]    = "";
+  // Bluetooth
+  char     bleName[24] = BLE_DEVICE_NAME;
 };
 
 Config       cfg;
@@ -141,6 +143,7 @@ void loadConfig() {
   cfg.micPinData  = prefs.getUChar("msd",  cfg.micPinData);
   prefs.getString("ssid", cfg.ssid, sizeof(cfg.ssid));
   prefs.getString("pass", cfg.pass, sizeof(cfg.pass));
+  prefs.getString("bnam", cfg.bleName, sizeof(cfg.bleName));
   prefs.end();
 }
 
@@ -170,6 +173,7 @@ void saveConfig() {
   prefs.putUChar("msd",   cfg.micPinData);
   prefs.putString("ssid", cfg.ssid);
   prefs.putString("pass", cfg.pass);
+  prefs.putString("bnam", cfg.bleName);
   prefs.end();
 }
 
@@ -385,13 +389,14 @@ void onControlChange(byte channel, byte number, byte value) {
 }
 
 void setupBleMidi() {
-  BLEMIDI.setHandleConnected([]()    { bleConnected = true;  Serial.printf("[BLE] Device \"%s\" connected\n",   BLE_DEVICE_NAME); });
-  BLEMIDI.setHandleDisconnected([]() { bleConnected = false; Serial.printf("[BLE] Device \"%s\" disconnected\n", BLE_DEVICE_NAME); });
+  BLEMIDI.setName(cfg.bleName);
+  BLEMIDI.setHandleConnected([]()    { bleConnected = true;  Serial.printf("[BLE] Device \"%s\" connected\n",   cfg.bleName); });
+  BLEMIDI.setHandleDisconnected([]() { bleConnected = false; Serial.printf("[BLE] Device \"%s\" disconnected\n", cfg.bleName); });
   MIDI.setHandleNoteOn(onNoteOn);
   MIDI.setHandleNoteOff(onNoteOff);
   MIDI.setHandleControlChange(onControlChange);
   MIDI.begin(MIDI_CHANNEL_OMNI);
-  Serial.printf("[BLE] Device \"%s\" waiting for pairing\n", BLE_DEVICE_NAME);
+  Serial.printf("[BLE] Device \"%s\" waiting for pairing\n", cfg.bleName);
 }
 
 // -------------------
@@ -431,6 +436,7 @@ void setupMic() {
 }
 
 void pumpMicEvents() {
+  if (!cfg.micEnabled) return;
   if (!micRunning() || !micEvents()) return;
   MicEvent ev;
   while (xQueueReceive(micEvents(), &ev, 0) == pdTRUE) {
@@ -575,13 +581,14 @@ void sendConfigJson(AsyncWebServerRequest *req) {
   doc["micSck"]      = cfg.micPinSck;
   doc["micWs"]       = cfg.micPinCh;
   doc["micSd"]       = cfg.micPinData;
-  doc["ssid"]        = cfg.ssid;        // the password is never returned
+  doc["ssid"]        = cfg.ssid;        // ssid only (the password is never returned)
+  doc["bleName"]     = cfg.bleName;
 
   JsonObject st  = doc["status"].to<JsonObject>();
   st["mode"]     = apMode ? "ap" : "sta";
   st["ip"]       = apMode ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
   st["ble"]      = bleConnected;
-  st["bleName"]  = BLE_DEVICE_NAME;
+  st["bleName"]  = cfg.bleName;
   st["numLeds"]  = activeNumLeds();
   st["power"]    = (cfg.relayPin < 0) ? -1 : (powerOn ? 1 : 0);
   st["mic"]      = micRunning();
@@ -601,6 +608,7 @@ void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
   const uint8_t oldMicSck = cfg.micPinSck;
   const uint8_t oldMicWs  = cfg.micPinCh;
   const uint8_t oldMicSd  = cfg.micPinData;
+  char oldName[24]; strlcpy(oldName, cfg.bleName, sizeof(oldName));
 
   if (o["colorLeft"].is<const char*>())   cfg.colorLeft   = hexToColor(o["colorLeft"]);
   if (o["colorRight"].is<const char*>())  cfg.colorRight  = hexToColor(o["colorRight"]);
@@ -624,6 +632,7 @@ void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
   if (o["micSck"].is<int>() && isValidMicPin(o["micSck"])) cfg.micPinSck  = o["micSck"];
   if (o["micWs"].is<int>()  && isValidMicPin(o["micWs"]))  cfg.micPinCh   = o["micWs"];
   if (o["micSd"].is<int>()  && isValidMicPin(o["micSd"]))  cfg.micPinData = o["micSd"];
+  if (o["bleName"].is<const char*>()) { const char *s = o["bleName"]; if (*s) strlcpy(cfg.bleName, s, sizeof(cfg.bleName)); }
 
   saveConfig();
   ledsDirty = true;
@@ -636,7 +645,7 @@ void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
 
   JsonDocument res;
   res["ok"]          = true;
-  res["needsReboot"] = (cfg.ledPin != oldLed) || (cfg.relayPin != oldRelay) || (cfg.micEnabled != oldMicEn) || (cfg.micPinSck != oldMicSck) || (cfg.micPinCh != oldMicWs) || (cfg.micPinData != oldMicSd);
+  res["needsReboot"] = (cfg.ledPin != oldLed) || (cfg.relayPin != oldRelay) || (cfg.micEnabled != oldMicEn) || (cfg.micPinSck != oldMicSck) || (cfg.micPinCh != oldMicWs) || (cfg.micPinData != oldMicSd) || (strcmp(cfg.bleName, oldName) != 0);
   res["micPinsOk"]   = areValidMicPins();
   res["numLeds"]     = activeNumLeds();
   String out;
