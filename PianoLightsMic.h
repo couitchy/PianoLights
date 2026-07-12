@@ -39,6 +39,7 @@
 #define MIC_HOP             128       // samples per DMA read (8 ms)
 #define MIC_RING            4096      // ring buffer length (power of two)
 #define MIC_WIN             1600      // analysis window: 100 ms
+#define MIC_WIN_DELAY       640       // skip 40 ms so the key-strike transient stays out of the analysis window
 #define MIC_NOTE_MIN        21        // A0
 #define MIC_NOTE_MAX        108       // C8
 #define MIC_NOTEOFF_MS      200       // automatic note-off delay after a detection
@@ -342,7 +343,7 @@ static void micTaskFn(void *) {
     }
     else {  // ARMED: wait until a full analysis window has elapsed since the onset
       if (db > onsetPeakDb) onsetPeakDb = db;
-      if (s_total - onsetTotal >= MIC_WIN) {
+      if (s_total - onsetTotal >= MIC_WIN + MIC_WIN_DELAY) {
         micAnalyzeWindow(onsetPeakDb);
         state = IDLE;
       }

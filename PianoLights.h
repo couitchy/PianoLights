@@ -695,6 +695,7 @@ async function saveWifi() {
 async function reboot() {
     try {
         await api('/api/reboot', {});
+        setTimeout(() => location.reload(), 9000);
     } catch (e) {}
     msg("Rebooting...");
 }
