@@ -11,6 +11,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Piano Lights</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%2317171f'/><rect x='1.2' y='2' width='3.1' height='12' rx='.6' fill='%23e9e6df'/><rect x='4.7' y='2' width='3.1' height='12' rx='.6' fill='%23e9e6df'/><rect x='8.2' y='2' width='3.1' height='12' rx='.6' fill='%23e9e6df'/><rect x='11.7' y='2' width='3.1' height='12' rx='.6' fill='%23e9e6df'/><rect x='3.6' y='2' width='1.8' height='6.5' rx='.4' fill='%230e0e13'/><rect x='10.6' y='2' width='1.8' height='6.5' rx='.4' fill='%230e0e13'/></svg>">
     <style>
         :root {
             --bg: #0e0e13;

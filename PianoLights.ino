@@ -64,14 +64,14 @@ struct Config {
   float    ledsPerKey  = 2.0f;     // LEDs-per-key ratio
   int16_t  ledOffset   = 0;        // index of the 1st usable LED
   bool     reversed    = false;    // strip direction
-  uint8_t  ledPin      = 16;       // data GPIO (reboot required)
-  int8_t   relayPin    = -1;       // power relay GPIO (reboot required)
+  uint8_t  ledPin      = 16;       // data GPIO
+  int8_t   relayPin    = -1;       // power relay GPIO
   // Colors
-  uint32_t colorLeft   = 0x00A0FF; // left hand
-  uint32_t colorRight  = 0xFF4000; // right hand
-  uint32_t colorOther  = 0x00FF60; // any other channel
-  uint8_t  chLeft      = 1;        // left-hand MIDI channel (1-16)
-  uint8_t  chRight     = 2;        // right-hand MIDI channel (1-16)
+  uint32_t colorLeft   = 0x0000FF; // left hand
+  uint32_t colorRight  = 0x00FF00; // right hand
+  uint32_t colorOther  = 0xFFFFFF; // any other channel
+  uint8_t  chLeft      = 2;        // left-hand MIDI channel (1-16)
+  uint8_t  chRight     = 1;        // right-hand MIDI channel (1-16)
   uint8_t  brightness  = 100;      // global brightness (5-255)
   // Visual effects
   bool     fxLeft      = false;    // visual effects for left hand
