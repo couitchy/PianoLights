@@ -442,7 +442,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     </div>
     <div class="row" style="margin-top:14px">
         <span class="note">Calibration:</span>
-        <select id="calNote" style="width:auto"></select>
+        <span style="display:flex;gap:3px;align-items:center">
+            <button onclick="calStep(-1)" title="Previous note" style="padding:8px 10px">&#9664;</button>
+            <select id="calNote" style="width:auto"></select>
+            <button onclick="calStep(1)" title="Next note" style="padding:8px 10px">&#9654;</button>
+        </span>
         <button onclick="calCaptureOne()">Capture this note</button>
         <button onclick="calClearAll()">Clear all notes</button>
         <span class="note" id="calInfo"></span>
@@ -483,7 +487,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     <h2>Firmware update</h2>
     <div class="row">
         <input id="fw" type="file" accept=".bin">
-        <button id="fwBtn" onclick="uploadFw()">Send</button>
+        <button id="fwBtn" onclick="uploadFw()">Send and flash</button>
         <span class="note">Current version: <b id="fwVer">—</b></span>
     </div>
     <div id="fwBar" hidden style="height:8px;background:#101016;border:1px solid var(--line);border-radius:5px;overflow:hidden;margin-top:14px">
@@ -778,6 +782,13 @@ async function calCapture(n, timeout) {
     return null;
 }
 
+function calStep(d) {
+    const s = $('calNote');
+    const i = s.selectedIndex + d;
+    if (i < 0 || i >= s.options.length) return;
+    s.selectedIndex = i;
+}
+
 async function calCaptureOne() {
     if (calBusy) return;
     if (!micRunning) return msg('Microphone inactive');
@@ -787,6 +798,7 @@ async function calCaptureOne() {
         $('calInfo').textContent = 'Play ' + noteName(n) + ' now...';
         const r = await calCapture(n, 12000);
         $('calInfo').textContent = r ? noteName(n) + ' captured: ' + r.freq + ' Hz (' + (r.cents >= 0 ? '+' : '') + r.cents + ' cents)' : 'Timeout — no strike detected';
+        if (r) calStep(1);
     } catch (e) {
         $('calInfo').textContent = 'Network error';
     }
