@@ -1,24 +1,23 @@
 <table>
   <tr>
     <td>
-      <img src="https://github.com/user-attachments/assets/50fa1be6-618c-4df2-8bbb-7a6f6f3c3b64" alt="1" width="100%" />
+      <img src="https://github.com/user-attachments/assets/b1f52ee8-1488-4142-9ec2-79c5c37ee162" alt="screenshot" width="100%" />
     </td>
     <td>
-      <video src="https://github.com/user-attachments/assets/31f3e455-6a3a-4056-8376-136cc2250673" alt="2" width="100%" />
+      <video src="https://github.com/user-attachments/assets/a7c0575b-9922-4309-867f-b7b0ae8cd12d" alt="demo" width="100%" />
     </td>
   </tr>
 </table>
 
-# Piano Lights, a BLE/MIDI bridge between Synthesia and a LED strip
+# Piano Lights, a bridge between Synthesia, a LED strip and even a microphone
 
-Arduino firmware for the ESP32 WROOM: a **BLE/MIDI** peripheral recognized by
-Windows and usable as a **MIDI output in Synthesia** (with the 'key lights'
-feature). Incoming notes light up the matching LEDs of a **WS2812B**
-strip. Alignment and colors are configured through an **embedded web
-page** (WiFi STA with automatic AP fallback).
+Piano Lights is an Arduino firmware for ESP32: it acts as a **Bluetooth (BLE)** device recognized by
+Windows and usable as a **MIDI output in Synthesia** (with the 'key lights' feature).
+Incoming notes light up the matching LEDs of a **WS2812B** strip.
+Alignment and colors are configured through an **embedded web page** (WiFi STA with automatic AP fallback).
 
 Optionally, an **I2S MEMS microphone** (INMP441) turns the firmware into a
-MIDI *input* as well: it listens to an **acoustic piano** and reports the
+**MIDI *input*** as well: it listens to an **acoustic piano** and reports the
 notes actually played back to Synthesia, so the song waits for you even
 without a digital piano ("Melody" mode).
 
