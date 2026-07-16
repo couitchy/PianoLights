@@ -80,12 +80,14 @@ without a digital piano ("Melody" mode).
    - in the **Setting** dropdown, look for
      **`Midi.UseWinRTMidi`**
    - tick the **Value** box, then close the config and restart Synthesia
+   - (Windows 10 only) if Synthesia does not see the device, try to install
+     [Windows MIDI Services SDK Runtime and Tools](https://microsoft.github.io/MIDI/get-latest/)
 3. Synthesia: **Settings → Music Devices** → under outputs, enable
    **Piano-Lights (MIDI OUT)** and enable the key-lighting feature on it
    (*key lights*). As of today there is no mode that splits hands by channel.
 4. Copy the left-hand / right-hand **channel numbers** shown
    by Synthesia into the web page (Colors section). By default the
-   firmware expects left = channel 1, right = channel 2; any other channel
+   firmware expects right = channel 1, left = channel 2; any other channel
    uses the third color.
 5. (Optional) Disable features other than key lighting to avoid getting
    feedback from the piano itself (*Prevent "local" notes* does not seem to do it).
