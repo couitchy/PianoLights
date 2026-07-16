@@ -39,11 +39,9 @@
 #define MIC_HOP             128       // samples per DMA read (8 ms)
 #define MIC_RING            4096      // ring buffer length (power of two)
 #define MIC_WIN             1600      // analysis window: 100 ms
-#define MIC_WIN_DELAY       640       // skip 40 ms so the key-strike transient stays out of the analysis window
 #define MIC_NOTE_MIN        21        // A0
 #define MIC_NOTE_MAX        108       // C8
 #define MIC_NOTEOFF_MS      200       // automatic note-off delay after a detection
-#define MIC_RETRIG_MS       250       // per-note retrigger lockout (MIDI hygiene)
 #define MIC_ONSET_GAP_MS    60        // minimum delay between two onsets
 #define MIC_ABS_FLOOR_DB    -30.0f    // onset threshold (post-gain dBFS): the gain sets sensitivity
 #define MIC_DC_ALPHA        0.001f    // INMP441 DC offset removal (~2.5 Hz high-pass)
@@ -100,7 +98,6 @@ static volatile uint32_t s_lastMs    = 0;
 
 static const volatile uint8_t *s_expected = nullptr;  // pointer to noteChan[128] in the sketch
 static float    s_calFreqTable[MIC_NOTE_MAX - MIC_NOTE_MIN + 1];  // 0 = not calibrated
-static uint32_t s_lastSentMs[128] = {0};
 static uint32_t s_lastOnsetMs = 0;
 
 struct MicActive { uint8_t note; uint32_t offAt; bool used; };
@@ -265,8 +262,6 @@ static void micAnalyzeWindow(float onsetPeakDb) {
     const float sc = micConcentration(f, energy);
     if (sc < thr) continue;
     if (sc > bestScore) { bestScore = sc; bestNote = n; bestF = f; }
-    if (now - s_lastSentMs[n] <= MIC_RETRIG_MS) continue;  // retrigger lockout
-    s_lastSentMs[n] = now;
     micPushEvent(n, vel, true);
     micScheduleOff(n, now);
   }
@@ -332,7 +327,7 @@ static void micTaskFn(void *) {
 
     // Onset detection then deferred full-window analysis. Plain absolute threshold: the gain
     // slider directly sets the acoustic sensitivity. While the level stays above it, analyses
-    // simply repeat (the per-note retrigger lockout prevents any MIDI spam).
+    // simply repeat (at the cost of multiple MIDI detections)
     if (state == IDLE) {
       if (db > MIC_ABS_FLOOR_DB && now - s_lastOnsetMs > MIC_ONSET_GAP_MS) {
         state         = ARMED;
@@ -343,7 +338,7 @@ static void micTaskFn(void *) {
     }
     else {  // ARMED: wait until a full analysis window has elapsed since the onset
       if (db > onsetPeakDb) onsetPeakDb = db;
-      if (s_total - onsetTotal >= MIC_WIN + MIC_WIN_DELAY) {
+      if (s_total - onsetTotal >= MIC_WIN) {
         micAnalyzeWindow(onsetPeakDb);
         state = IDLE;
       }
