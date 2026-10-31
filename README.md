@@ -120,13 +120,24 @@ sends the notes it hears back over BLE/MIDI.
    pinning at the top, and **threshold** to trade sensitivity against false
    positives. The detected note is shown live under the meter.
 
-### Limitations
+### Detection modes and limitations
 
-The firmware does not attempt blind polyphonic transcription.
-Instead it verifies the notes Synthesia already expects: the keys it lights
-up are exactly the notes the player should hit, so a small Goertzel filter bank
-only checks whether each expected note's fundamental and first harmonics are
-present in a 100 ms window after a percussive onset.
+The firmware does not attempt blind polyphonic transcription. Instead, it follows
+the notes Synthesia already expects.
+
+Detection starts in **STRICT** mode: after each percussive onset, a small Goertzel
+filter bank checks the expected notes' fundamental and first harmonics over a
+100 ms window.
+
+After a successful match, **FAST-TRACK** mode reduces latency by immediately
+validating the currently expected notes on each onset. Spectral analysis continues
+in the background as a watchdog: repeated mismatches or a playing hesitation
+automatically return detection to STRICT mode.
+
+Because onset detection is level-based, long-ringing notes or the sustain pedal
+may produce repeated pseudo-onsets until the sound falls below the onset floor.
+FAST-TRACK deliberately favors low latency and missed-note avoidance over strict
+wrong-note rejection.
 
 ## 6. Architecture
 
@@ -134,7 +145,7 @@ present in a 100 ms window after a percussive onset.
 |---------------------|-------------------------------------------------------------|
 | `PianoLights.ino`   | BLE/MIDI, note→LED mapping, WiFi STA/AP, HTTP API, NVS       |
 | `PianoLights.h`     | Configuration page (standalone HTML/CSS/JS, in PROGMEM)      |
-| `PianoLightsMic.h`  | I2S microphone capture, onset + Goertzel note detection, calibration |
+| `PianoLightsMic.h`  | I2S capture, onset detection, strict/fast-track note following, Goertzel spectral watchdog and calibration |
 
 HTTP API: `GET /api/config`, `POST /api/config`, `POST /api/test`
 (`{note, on, ch}`), `POST /api/alloff`, `POST /api/wifi`, `POST /api/reboot`,

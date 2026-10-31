@@ -40,7 +40,7 @@
 // ---------
 // Constants
 // ---------
-#define FW_VERSION              "1.8"
+#define FW_VERSION              "1.9"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // AP-mode SSID
