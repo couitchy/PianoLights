@@ -6,16 +6,26 @@
  *    1. Audio is captured with an I2S MEMS microphone (DMA driven, no CPU cost for acquisition).
  *    2. An onset detector spots key strikes (short-term RMS above a fixed absolute threshold,
  *       post-gain: the gain slider therefore sets the acoustic sensitivity).
- *    3. For each expected note (lit by Synthesia), the analyzer measures the energy concentration
- *       of the window on its first 3 partials (Goertzel). If it exceeds the threshold set by the
- *       threshold slider, the note is considered played. This is exactly the same measure as the
- *       one used by calibration: simple, level independent (it is a ratio) and frequency
- *       independent (works from A0 to C8).
+ *    3. Detection runs in one of two modes:
+ *       - STRICT (start-up / recovery): for each expected note (lit by Synthesia), the analyzer
+ *         measures the energy concentration of a 100 ms window on its first 3 partials
+ *         (Goertzel). If it exceeds the threshold slider, the note is considered played.
+ *         Latency: ~100 ms per strike.
+ *       - FAST-TRACK (score following): as long as the pianist seems on track, every onset
+ *         immediately validates all currently expected notes (latency < 20 ms). The spectral
+ *         analysis still runs afterwards as a watchdog on the very notes that were validated:
+ *         MIC_WD_FAILS consecutive spectral mismatches (wrong notes played), or no onset for
+ *         MIC_HESITATE_MS while notes are expected (pianist stalled), drop back to STRICT.
+ *         A successful STRICT confirmation re-enters FAST-TRACK.
  *    4. Confirmed notes are pushed to a FreeRTOS queue; the main loop forwards them over BLE/MIDI.
  *
  *  There is deliberately NO disambiguation guard (octave, sub-harmonic, etc.): an expected note
  *  whose partials are excited by another genuinely played note will be confirmed. This is an
  *  accepted trade-off: never miss a played note, at the cost of accepting impostors.
+ *
+ *  Known limits of the simple level-based onset detector: while the strings ring above the
+ *  onset floor (long notes, sustain pedal), pseudo-onsets keep firing, so the hesitation
+ *  timeout only starts counting once the sound has decayed below MIC_ABS_FLOOR_DB.
  *
  *  The only two detection controls are the exposed sliders (micSetGain / micSetThreshold).
  *
@@ -38,11 +48,13 @@
 #define MIC_SAMPLE_RATE     16000     // 16 kHz is enough since piano fundamentals top out around 4.2
 #define MIC_HOP             128       // samples per DMA read (8 ms)
 #define MIC_RING            4096      // ring buffer length (power of two)
-#define MIC_WIN             1600      // analysis window: 100 ms
+#define MIC_WIN             1600      // analysis window: 100 ms (starts right at the onset, the Hann window tames the transient)
 #define MIC_NOTE_MIN        21        // A0
 #define MIC_NOTE_MAX        108       // C8
 #define MIC_NOTEOFF_MS      200       // automatic note-off delay after a detection
 #define MIC_ONSET_GAP_MS    60        // minimum delay between two onsets
+#define MIC_WD_FAILS        2         // consecutive spectral failures before leaving fast-track
+#define MIC_HESITATE_MS     1200      // no onset while notes are expected: pianist is hesitating
 #define MIC_ABS_FLOOR_DB    -30.0f    // onset threshold (post-gain dBFS): the gain sets sensitivity
 #define MIC_DC_ALPHA        0.001f    // INMP441 DC offset removal (~2.5 Hz high-pass)
 #define MIC_ENV_RELEASE     0.02f     // displayed level envelope
@@ -99,6 +111,12 @@ static volatile uint32_t s_lastMs    = 0;
 static const volatile uint8_t *s_expected = nullptr;  // pointer to noteChan[128] in the sketch
 static float    s_calFreqTable[MIC_NOTE_MAX - MIC_NOTE_MIN + 1];  // 0 = not calibrated
 static uint32_t s_lastOnsetMs = 0;
+
+// Fast-track (score following) state
+static bool    s_fastTrack = false;              // false = STRICT, true = FAST-TRACK
+static uint8_t s_wdFails   = 0;                  // consecutive watchdog failures
+static uint8_t s_wdNotes[128];                   // notes fast-validated at the last onset
+static bool    s_wdPending = false;              // a watchdog verdict is awaited
 
 struct MicActive { uint8_t note; uint32_t offAt; bool used; };
 static MicActive s_active[MIC_ACTIVE_SLOTS];
@@ -185,6 +203,35 @@ static void micScheduleOff(uint8_t note, uint32_t now) {
   micPushEvent(note, 0, false);  // no free slot: immediate note-off rather than a stuck note
 }
 
+static inline uint8_t micVelFromDb(float peakDb) {
+  return (uint8_t)constrain((int)((peakDb + 50.0f) * 2.5f) + 20, 20, 127);
+}
+
+static bool micAnyExpected() {
+  if (!s_expected) return false;
+  for (int n = MIC_NOTE_MIN; n <= MIC_NOTE_MAX; n++)
+    if (s_expected[n]) return true;
+  return false;
+}
+
+// FAST-TRACK: an onset just fired while the pianist is deemed on track. Validate every
+// currently expected note right away (latency = one DMA hop instead of a full analysis
+// window) and remember them so the deferred spectral analysis can act as a watchdog.
+// Never fires while a calibration capture is armed (a calibration strike is not MIDI).
+static void micFastValidate(float peakDb, uint32_t now) {
+  memset(s_wdNotes, 0, sizeof(s_wdNotes));
+  s_wdPending = false;
+  if (!s_expected || s_calArmedNote >= 0) return;
+  const uint8_t vel = micVelFromDb(peakDb);
+  for (int n = MIC_NOTE_MIN; n <= MIC_NOTE_MAX; n++) {
+    if (!s_expected[n]) continue;
+    micPushEvent(n, vel, true);
+    micScheduleOff(n, now);
+    s_wdNotes[n]  = 1;
+    s_wdPending   = true;
+  }
+}
+
 static void micAnalyzeWindow(float onsetPeakDb) {
   // Copy the last MIC_WIN samples out of the ring and apply a Hann window
   const uint32_t start = s_total - MIC_WIN;
@@ -245,14 +292,49 @@ static void micAnalyzeWindow(float onsetPeakDb) {
     return;  // a calibration strike is never forwarded as MIDI
   }
 
-  // Targeted detection: for each expected note (lit by Synthesia), the note is deemed played
-  // if the energy concentration on its partials exceeds the slider threshold. No
-  // disambiguation: an expected note excited by the harmonics of another played note will be
-  // confirmed (accepted trade-off: zero missed notes rather than zero impostors).
   if (!s_expected) return;
 
+  // FAST-TRACK: the expected notes were already validated at the onset. The spectral
+  // analysis now only serves as a watchdog: it re-checks the very notes that were
+  // fast-validated (a snapshot, since Synthesia may have advanced meanwhile). If none of
+  // them shows a credible energy concentration, the pianist most likely played something
+  // else: after MIC_WD_FAILS consecutive mismatches, drop back to STRICT mode.
+  if (s_fastTrack) {
+    if (!s_wdPending) return;      // onset with nothing expected (ambient noise): no verdict
+    s_wdPending = false;
+
+    const float thr = s_thr;
+    int   bestNote = -1;
+    float bestScore = 0.0f, bestF = 0.0f;
+    for (int n = MIC_NOTE_MIN; n <= MIC_NOTE_MAX; n++) {
+      if (!s_wdNotes[n]) continue;
+      const float f  = micNoteFreq(n);
+      const float sc = micConcentration(f, energy);
+      if (sc >= thr && sc > bestScore) { bestScore = sc; bestNote = n; bestF = f; }
+    }
+
+    if (bestNote >= 0) {
+      s_wdFails   = 0;
+      s_lastNote  = bestNote;
+      s_lastFreq  = bestF;
+      s_lastCents = micCentsVsEq(bestNote, bestF);
+      s_lastMs    = now;
+    }
+    else if (++s_wdFails >= MIC_WD_FAILS) {
+      s_fastTrack = false;
+      s_wdFails   = 0;
+      Serial.println("[MIC] Off track: back to strict detection");
+    }
+    return;
+  }
+
+  // STRICT: for each expected note (lit by Synthesia), the note is deemed played if the
+  // energy concentration on its partials exceeds the slider threshold. No disambiguation:
+  // an expected note excited by the harmonics of another played note will be confirmed
+  // (accepted trade-off: zero missed notes rather than zero impostors). A successful
+  // confirmation is evidence the pianist is on track: promote to FAST-TRACK.
   const float   thr = s_thr;
-  const uint8_t vel = (uint8_t)constrain((int)((onsetPeakDb + 50.0f) * 2.5f) + 20, 20, 127);
+  const uint8_t vel = micVelFromDb(onsetPeakDb);
   int   bestNote = -1;
   float bestScore = 0.0f, bestF = 0.0f;
 
@@ -271,6 +353,9 @@ static void micAnalyzeWindow(float onsetPeakDb) {
     s_lastFreq  = bestF;
     s_lastCents = micCentsVsEq(bestNote, bestF);
     s_lastMs    = now;
+    s_fastTrack = true;
+    s_wdFails   = 0;
+    Serial.println("[MIC] On track: fast-track validation enabled");
   }
 }
 
@@ -326,14 +411,24 @@ static void micTaskFn(void *) {
     }
 
     // Onset detection then deferred full-window analysis. Plain absolute threshold: the gain
-    // slider directly sets the acoustic sensitivity. While the level stays above it, analyses
-    // simply repeat (at the cost of multiple MIDI detections)
+    // slider directly sets the acoustic sensitivity. In FAST-TRACK mode the expected notes
+    // are validated right here, at the onset (the deferred analysis then only acts as a
+    // watchdog). Note that while the level stays above the floor (ringing strings, sustain
+    // pedal), pseudo-onsets keep firing: expected notes still lit by Synthesia will be
+    // re-validated at every cycle, and the hesitation timeout cannot start counting.
     if (state == IDLE) {
       if (db > MIC_ABS_FLOOR_DB && now - s_lastOnsetMs > MIC_ONSET_GAP_MS) {
         state         = ARMED;
         onsetTotal    = s_total;
         onsetPeakDb   = db;
         s_lastOnsetMs = now;
+        if (s_fastTrack) micFastValidate(db, now);
+      }
+      // Hesitation: notes are expected but the pianist has stopped striking keys
+      else if (s_fastTrack && now - s_lastOnsetMs > MIC_HESITATE_MS && micAnyExpected()) {
+        s_fastTrack = false;
+        s_wdFails   = 0;
+        Serial.println("[MIC] Hesitation: back to strict detection");
       }
     }
     else {  // ARMED: wait until a full analysis window has elapsed since the onset
@@ -362,6 +457,7 @@ bool micBegin(uint8_t pinSck, uint8_t pinWs, uint8_t pinSd, const volatile uint8
   }
   memset(s_ring, 0, MIC_RING * sizeof(float));
   memset(s_active, 0, sizeof(s_active));
+  memset(s_wdNotes, 0, sizeof(s_wdNotes));
 
   s_expected = expectedByNote;
   micLoadCal();

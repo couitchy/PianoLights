@@ -201,7 +201,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
             accent-color: var(--amber);
         }
 
-        /* Strip + keyboard preview */
         #strip {
             display: flex;
             height: 13px;
