@@ -4,8 +4,11 @@
  * ==================================================================================================
  *
  *    1. Audio is captured with an I2S MEMS microphone (DMA driven, no CPU cost for acquisition).
- *    2. An onset detector spots key strikes (short-term RMS above a fixed absolute threshold,
- *       post-gain: the gain slider therefore sets the acoustic sensitivity).
+ *    2. An onset detector spots key strikes. An onset is a RISE in level: the 8 ms RMS must jump
+ *       by at least MIC_ONSET_RISE_DB above the quietest of the previous MIC_ONSET_LOOKBACK hops,
+ *       and sit above an absolute floor (post-gain: the gain slider sets the acoustic
+ *       sensitivity). A struck piano string always has a sharp attack; a ringing or decaying
+ *       chord never rises, so sustained sound produces no onsets at all.
  *    3. Detection runs in one of two modes:
  *       - STRICT (start-up / recovery): for each expected note (lit by Synthesia), the analyzer
  *         measures the energy concentration of a 100 ms window on its first 3 partials
@@ -19,21 +22,26 @@
  *         A successful STRICT confirmation re-enters FAST-TRACK.
  *    4. Confirmed notes are pushed to a FreeRTOS queue; the main loop forwards them over BLE/MIDI.
  *
+ *  MIDI note bookkeeping. The module keeps an on/off state per note. A validated note yields one
+ *  NoteOn and, MIC_NOTEOFF_MS later, one NoteOff: a fixed-length trigger, never extended. If a note
+ *  is validated again while still on (genuine fast repetition) a NoteOff is sent first, so the
+ *  receiver always sees a clean Off->On transition. The device therefore never floods the BLE link
+ *  with redundant NoteOns, which is what used to exhaust the BLE buffers and lose NoteOffs. As a
+ *  last safety net, after MIC_SILENCE_FLUSH_MS without any onset, a NoteOff is re-sent for every
+ *  note turned on since the previous flush: a duplicate NoteOff is harmless, a lost one leaves a
+ *  key stuck in Synthesia.
+ *
  *  There is deliberately NO disambiguation guard (octave, sub-harmonic, etc.): an expected note
  *  whose partials are excited by another genuinely played note will be confirmed. This is an
  *  accepted trade-off: never miss a played note, at the cost of accepting impostors.
- *
- *  Known limits of the simple level-based onset detector: while the strings ring above the
- *  onset floor (long notes, sustain pedal), pseudo-onsets keep firing, so the hesitation
- *  timeout only starts counting once the sound has decayed below MIC_ABS_FLOOR_DB.
  *
  *  The only two detection controls are the exposed sliders (micSetGain / micSetThreshold).
  *
  *  The per-note calibration (real measured fundamental, "stretched" tuning of acoustic pianos)
  *  is persisted in NVS (namespace "plmic").
  *
- *  Public API: micBegin / micRunning / micEvents / micSetGain / micSetThreshold / micGetStatus /
- *  micArmCal / micClearCal / micCalFreq / micCalCount.
+ *  Public API: micBegin / micRunning / micEvents / micDroppedEvents / micSetGain /
+ *  micSetThreshold / micGetStatus / micArmCal / micClearCal / micCalFreq / micCalCount.
  * ==================================================================================================
  */
 #pragma once
@@ -51,15 +59,21 @@
 #define MIC_WIN             1600      // analysis window: 100 ms (starts right at the onset, the Hann window tames the transient)
 #define MIC_NOTE_MIN        21        // A0
 #define MIC_NOTE_MAX        108       // C8
-#define MIC_NOTEOFF_MS      200       // automatic note-off delay after a detection
+#define MIC_QUEUE_LEN       64        // event queue depth
+#define MIC_QUEUE_WAIT_MS   20        // how long the mic task may wait on a full queue before dropping
+
+// Detection tuning
+#define MIC_ABS_FLOOR_DB    -30.0f    // onset floor (post-gain dBFS): the gain slider sets sensitivity
+#define MIC_ONSET_RISE_DB   6.0f      // minimum level jump vs the recent past to call it a strike
+#define MIC_ONSET_LOOKBACK  4         // hops of history the jump is measured against (4 x 8 ms = 32 ms)
 #define MIC_ONSET_GAP_MS    60        // minimum delay between two onsets
+#define MIC_NOTEOFF_MS      150       // fixed MIDI note length (NoteOff this long after the NoteOn)
+#define MIC_SILENCE_FLUSH_MS 2000     // silence after which NoteOffs are re-sent for safety
 #define MIC_WD_FAILS        2         // consecutive spectral failures before leaving fast-track
 #define MIC_HESITATE_MS     1200      // no onset while notes are expected: pianist is hesitating
-#define MIC_ABS_FLOOR_DB    -30.0f    // onset threshold (post-gain dBFS): the gain sets sensitivity
 #define MIC_DC_ALPHA        0.001f    // INMP441 DC offset removal (~2.5 Hz high-pass)
 #define MIC_ENV_RELEASE     0.02f     // displayed level envelope
 #define MIC_AMB_ALPHA       0.0005f   // slow ambient level tracker
-#define MIC_ACTIVE_SLOTS    16        // pending note-off slots
 
 struct MicEvent {
   uint8_t note;
@@ -96,6 +110,7 @@ static volatile float    s_levelDb   = -90.0f;
 static volatile float    s_noiseDb   = -70.0f;
 static float             s_dc        = 0.0f;      // running DC offset of the (post-gain) samples
 static volatile bool     s_running   = false;
+static volatile uint32_t s_dropped   = 0;         // events lost because the queue stayed full
 
 static volatile int      s_calArmedNote = -1;     // -1 = disarmed
 static volatile bool     s_calDone      = false;
@@ -112,14 +127,21 @@ static const volatile uint8_t *s_expected = nullptr;  // pointer to noteChan[128
 static float    s_calFreqTable[MIC_NOTE_MAX - MIC_NOTE_MIN + 1];  // 0 = not calibrated
 static uint32_t s_lastOnsetMs = 0;
 
+// Onset detector history: level of the last MIC_ONSET_LOOKBACK hops
+static float    s_hopDb[MIC_ONSET_LOOKBACK];
+static uint8_t  s_hopIdx = 0;
+
 // Fast-track (score following) state
 static bool    s_fastTrack = false;              // false = STRICT, true = FAST-TRACK
 static uint8_t s_wdFails   = 0;                  // consecutive watchdog failures
 static uint8_t s_wdNotes[128];                   // notes fast-validated at the last onset
 static bool    s_wdPending = false;              // a watchdog verdict is awaited
 
-struct MicActive { uint8_t note; uint32_t offAt; bool used; };
-static MicActive s_active[MIC_ACTIVE_SLOTS];
+// MIDI note bookkeeping
+static uint8_t  s_noteOn[128];                   // 1 = a NoteOn was pushed and its NoteOff is pending
+static uint32_t s_offAt[128];                    // millis() at which the pending NoteOff is due
+static uint8_t  s_dirty[128];                    // 1 = turned on since the last safety flush
+static bool     s_anyDirty = false;
 
 static Preferences s_micPrefs;
 
@@ -185,24 +207,56 @@ static void micSaveCal() {
   s_micPrefs.end();
 }
 
+// ----------------------------------------------------
+// MIDI note bookkeeping (all called from the mic task)
+// ----------------------------------------------------
+static void micPushEvent(uint8_t note, uint8_t vel, bool on) {
+  MicEvent ev = { note, vel, on };
+  // Wait a little on a full queue instead of dropping right away: the DMA holds ~48 ms of
+  // audio, and a dropped NoteOff is a key stuck in Synthesia until the safety flush
+  if (xQueueSend(s_micQueue, &ev, pdMS_TO_TICKS(MIC_QUEUE_WAIT_MS)) != pdTRUE)
+    s_dropped = s_dropped + 1;
+}
+
+// One validated strike = one fixed-length MIDI note. A note still on (fast repetition) is
+// released first so the receiver sees a clean Off->On transition.
+static void micNoteOn(uint8_t note, uint8_t vel, uint32_t now) {
+  if (s_noteOn[note]) micPushEvent(note, 0, false);
+  micPushEvent(note, vel, true);
+  s_noteOn[note] = 1;
+  s_offAt[note]  = now + MIC_NOTEOFF_MS;
+  s_dirty[note]  = 1;
+  s_anyDirty     = true;
+}
+
+// Sends the NoteOffs that are due
+static void micReleaseDue(uint32_t now) {
+  for (int n = MIC_NOTE_MIN; n <= MIC_NOTE_MAX; n++) {
+    if (s_noteOn[n] && (int32_t)(now - s_offAt[n]) >= 0) {
+      micPushEvent(n, 0, false);
+      s_noteOn[n] = 0;
+    }
+  }
+}
+
+// Safety net after a long silence: re-send a NoteOff for every note turned on since the last
+// flush. Covers any NoteOff lost below us (queue, BLE stack): a duplicate NoteOff is harmless
+static void micFlushStale() {
+  int k = 0;
+  for (int n = MIC_NOTE_MIN; n <= MIC_NOTE_MAX; n++) {
+    if (!s_dirty[n]) continue;
+    micPushEvent(n, 0, false);
+    s_dirty[n]  = 0;
+    s_noteOn[n] = 0;
+    k++;
+  }
+  s_anyDirty = false;
+  if (k) Serial.printf("[MIC] Safety flush: NoteOff re-sent for %d note%s\n", k, k > 1 ? "s" : "");
+}
+
 // -------------------------------------------------
 // Analysis of one window (runs inside the mic task)
 // -------------------------------------------------
-static void micPushEvent(uint8_t note, uint8_t vel, bool on) {
-  MicEvent ev = { note, vel, on };
-  xQueueSend(s_micQueue, &ev, 0);
-}
-
-static void micScheduleOff(uint8_t note, uint32_t now) {
-  for (auto &a : s_active) {                    // refresh if already pending
-    if (a.used && a.note == note) { a.offAt = now + MIC_NOTEOFF_MS; return; }
-  }
-  for (auto &a : s_active) {
-    if (!a.used) { a.used = true; a.note = note; a.offAt = now + MIC_NOTEOFF_MS; return; }
-  }
-  micPushEvent(note, 0, false);  // no free slot: immediate note-off rather than a stuck note
-}
-
 static inline uint8_t micVelFromDb(float peakDb) {
   return (uint8_t)constrain((int)((peakDb + 50.0f) * 2.5f) + 20, 20, 127);
 }
@@ -225,8 +279,7 @@ static void micFastValidate(float peakDb, uint32_t now) {
   const uint8_t vel = micVelFromDb(peakDb);
   for (int n = MIC_NOTE_MIN; n <= MIC_NOTE_MAX; n++) {
     if (!s_expected[n]) continue;
-    micPushEvent(n, vel, true);
-    micScheduleOff(n, now);
+    micNoteOn(n, vel, now);
     s_wdNotes[n]  = 1;
     s_wdPending   = true;
   }
@@ -344,8 +397,7 @@ static void micAnalyzeWindow(float onsetPeakDb) {
     const float sc = micConcentration(f, energy);
     if (sc < thr) continue;
     if (sc > bestScore) { bestScore = sc; bestNote = n; bestF = f; }
-    micPushEvent(n, vel, true);
-    micScheduleOff(n, now);
+    micNoteOn(n, vel, now);
   }
 
   if (bestNote >= 0) {
@@ -400,24 +452,25 @@ static void micTaskFn(void *) {
     // Slow ambient level estimate
     s_noiseDb += (db - s_noiseDb) * MIC_AMB_ALPHA;
 
+    // Reference for the onset detector: the quietest hop of the recent past (this hop excluded).
+    // A strike is a jump above that reference; a ringing chord drifts down and never jumps.
+    float refDb = s_hopDb[0];
+    for (int i = 1; i < MIC_ONSET_LOOKBACK; i++)
+      if (s_hopDb[i] < refDb) refDb = s_hopDb[i];
+    s_hopDb[s_hopIdx] = db;
+    s_hopIdx = (s_hopIdx + 1) % MIC_ONSET_LOOKBACK;
+
     const uint32_t now = millis();
 
-    // Pending automatic note-offs
-    for (auto &a : s_active) {
-      if (a.used && now >= a.offAt) {
-        micPushEvent(a.note, 0, false);
-        a.used = false;
-      }
-    }
+    // Pending NoteOffs (fixed note length)
+    micReleaseDue(now);
 
-    // Onset detection then deferred full-window analysis. Plain absolute threshold: the gain
-    // slider directly sets the acoustic sensitivity. In FAST-TRACK mode the expected notes
-    // are validated right here, at the onset (the deferred analysis then only acts as a
-    // watchdog). Note that while the level stays above the floor (ringing strings, sustain
-    // pedal), pseudo-onsets keep firing: expected notes still lit by Synthesia will be
-    // re-validated at every cycle, and the hesitation timeout cannot start counting.
+    // Onset detection then deferred full-window analysis. In FAST-TRACK mode the expected
+    // notes are validated right here, at the onset (the deferred analysis then only acts as
+    // a watchdog).
     if (state == IDLE) {
-      if (db > MIC_ABS_FLOOR_DB && now - s_lastOnsetMs > MIC_ONSET_GAP_MS) {
+      const bool strike = (db > MIC_ABS_FLOOR_DB) && (db - refDb >= MIC_ONSET_RISE_DB);
+      if (strike && now - s_lastOnsetMs > MIC_ONSET_GAP_MS) {
         state         = ARMED;
         onsetTotal    = s_total;
         onsetPeakDb   = db;
@@ -429,6 +482,10 @@ static void micTaskFn(void *) {
         s_fastTrack = false;
         s_wdFails   = 0;
         Serial.println("[MIC] Hesitation: back to strict detection");
+      }
+      // Long silence: make sure nothing is left hanging downstream
+      else if (s_anyDirty && now - s_lastOnsetMs > MIC_SILENCE_FLUSH_MS) {
+        micFlushStale();
       }
     }
     else {  // ARMED: wait until a full analysis window has elapsed since the onset
@@ -456,8 +513,11 @@ bool micBegin(uint8_t pinSck, uint8_t pinWs, uint8_t pinSd, const volatile uint8
     return false;
   }
   memset(s_ring, 0, MIC_RING * sizeof(float));
-  memset(s_active, 0, sizeof(s_active));
   memset(s_wdNotes, 0, sizeof(s_wdNotes));
+  memset(s_noteOn, 0, sizeof(s_noteOn));
+  memset(s_offAt, 0, sizeof(s_offAt));
+  memset(s_dirty, 0, sizeof(s_dirty));
+  for (int i = 0; i < MIC_ONSET_LOOKBACK; i++) s_hopDb[i] = -90.0f;
 
   s_expected = expectedByNote;
   micLoadCal();
@@ -493,7 +553,7 @@ bool micBegin(uint8_t pinSck, uint8_t pinWs, uint8_t pinSd, const volatile uint8
     return false;
   }
 
-  s_micQueue = xQueueCreate(32, sizeof(MicEvent));
+  s_micQueue = xQueueCreate(MIC_QUEUE_LEN, sizeof(MicEvent));
   // Core 0 hosts the radio stacks but the DSP load is light (a few ms per key strike)
   xTaskCreatePinnedToCore(micTaskFn, "mic", 6144, nullptr, 2, &s_micTask, 0);
 
@@ -503,6 +563,7 @@ bool micBegin(uint8_t pinSck, uint8_t pinWs, uint8_t pinSd, const volatile uint8
 
 bool micRunning()               { return s_running; }
 QueueHandle_t micEvents()       { return s_micQueue; }
+uint32_t micDroppedEvents()     { return s_dropped; }
 
 void micSetGain(uint8_t g)      { s_gain = (float)constrain((int)g, 1, 64); }
 void micSetThreshold(uint8_t t) { s_thr = constrain((int)t, 1, 100) * 0.002f; }  // default 40 -> 0.08

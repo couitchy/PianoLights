@@ -40,12 +40,16 @@
 // ---------
 // Constants
 // ---------
-#define FW_VERSION              "1.9"
+#define FW_VERSION              "1.10"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // AP-mode SSID
 #define MDNS_HOSTNAME           "pianolights"       // access via http://pianolights.local
+#define BLE_CONN_ITVL_MIN       6                   // requested connection interval, units of 1.25 ms (6 = 7.5 ms)
+#define BLE_CONN_ITVL_MAX       12                  // (12 = 15 ms), per the BLE-MIDI recommendation
 #define BLE_DEVICE_NAME         "Piano-Lights"      // default name shown under Windows
+#define BLE_TUNE_DELAY_MS       3000                // delay after connection before reading/tuning the link
+#define MIC_TX_SPACING_MS       3                   // minimum spacing between two mic-originated MIDI messages
 #define LED_MAX_COUNT           300                 // max allocated buffer
 #define LED_FRAME_INTERVAL_MS   15                  // ~60 fps max
 
@@ -113,6 +117,10 @@ volatile uint32_t rebootAt      = 0;      // != 0 -> scheduled restart
 volatile uint32_t cometAt       = 0;      // != 0 -> scheduled animation
 uint32_t          lastWifiRetry = 0;
 uint32_t          lastShow      = 0;
+uint32_t          lastMicTx     = 0;      // last mic-originated MIDI message
+uint32_t          micDropSeen   = 0;      // last reported mic queue drop count
+volatile uint32_t bleTuneAt     = 0;      // != 0 -> scheduled BLE link check
+uint8_t           bleTunePhase  = 0;      // 0 = measure and request, 1 = report result
 
 // -------------
 // Storage (NVS)
@@ -390,13 +398,46 @@ void onControlChange(byte channel, byte number, byte value) {
 
 void setupBleMidi() {
   BLEMIDI.setName(cfg.bleName);
-  BLEMIDI.setHandleConnected([]()    { bleConnected = true;  Serial.printf("[BLE] Device \"%s\" connected\n",   cfg.bleName); });
-  BLEMIDI.setHandleDisconnected([]() { bleConnected = false; Serial.printf("[BLE] Device \"%s\" disconnected\n", cfg.bleName); });
+  BLEMIDI.setHandleConnected([]() {
+    bleConnected = true;
+    bleTuneAt    = millis() + BLE_TUNE_DELAY_MS;   // let the central settle its parameters first
+    bleTunePhase = 0;
+    Serial.printf("[BLE] Device \"%s\" connected\n", cfg.bleName);
+  });
+  BLEMIDI.setHandleDisconnected([]() {
+    bleConnected = false;
+    bleTuneAt    = 0;
+    Serial.printf("[BLE] Device \"%s\" disconnected\n", cfg.bleName);
+  });
   MIDI.setHandleNoteOn(onNoteOn);
   MIDI.setHandleNoteOff(onNoteOff);
   MIDI.setHandleControlChange(onControlChange);
   MIDI.begin(MIDI_CHANNEL_OMNI);
   Serial.printf("[BLE] Device \"%s\" waiting for pairing\n", cfg.bleName);
+}
+
+// Reads the negotiated connection interval a few seconds after connection and, if the central
+// settled on a slow one (Windows often picks 30-60 ms), asks for the 7.5-15 ms recommended by the
+// BLE-MIDI specification. A slow interval caps the number of MIDI messages per second the link
+// can carry; beyond that, NimBLE's buffers fill up and notifications get lost
+void tuneBleLink() {
+  if (!bleTuneAt || !bleConnected || (int32_t)(millis() - bleTuneAt) < 0) return;
+  bleTuneAt = 0;
+
+  NimBLEServer *srv = NimBLEDevice::getServer();
+  if (!srv || srv->getConnectedCount() == 0) return;
+  NimBLEConnInfo info = srv->getPeerInfo(0);
+  const uint16_t itvl = info.getConnInterval();   // units of 1.25 ms
+  Serial.printf("[BLE] Connection interval %.2f ms, latency %u, timeout %u ms%s\n",
+                itvl * 1.25f, info.getConnLatency(), info.getConnTimeout() * 10,
+                bleTunePhase ? " (after request)" : "");
+
+  if (bleTunePhase == 0 && itvl > BLE_CONN_ITVL_MAX) {
+    Serial.println("[BLE] Requesting a 7.5-15 ms connection interval");
+    srv->updateConnParams(info.getConnHandle(), BLE_CONN_ITVL_MIN, BLE_CONN_ITVL_MAX, 0, 400);
+    bleTunePhase = 1;
+    bleTuneAt    = millis() + BLE_TUNE_DELAY_MS;   // report what the central actually granted
+  }
 }
 
 // -------------------
@@ -439,20 +480,65 @@ void pumpMicEvents() {
   if (!cfg.micEnabled) return;
   if (!micRunning() || !micEvents()) return;
   MicEvent ev;
-  while (xQueueReceive(micEvents(), &ev, 0) == pdTRUE) {
-    if (!bleConnected) continue;
-    if (ev.on) {
-      Serial.printf("[MIC] Detected note %u (vel=%u) -> NoteOn\n", ev.note, ev.velocity);
-      MIDI.sendNoteOn(ev.note, ev.velocity, 1);
-    } else {
-      MIDI.sendNoteOff(ev.note, 0, 1);
-    }
+
+  // Nobody listening: discard everything, nothing to pace
+  if (!bleConnected) {
+    while (xQueueReceive(micEvents(), &ev, 0) == pdTRUE) {}
+    return;
   }
+
+  // Report events lost upstream (mic queue full), should never happen in normal use
+  const uint32_t dropped = micDroppedEvents();
+  if (dropped != micDropSeen) {
+    Serial.printf("[MIC] WARNING: %u event%s dropped (queue full)\n", (unsigned)(dropped - micDropSeen), dropped - micDropSeen > 1 ? "s" : "");
+    micDropSeen = dropped;
+  }
+
+  // One MIDI message per pass, spaced out: each message is one BLE notification, and a burst
+  // of them in the same millisecond is what exhausts NimBLE's buffers and loses NoteOffs
+  if (millis() - lastMicTx < MIC_TX_SPACING_MS) return;
+  if (xQueueReceive(micEvents(), &ev, 0) != pdTRUE) return;
+
+  if (ev.on) {
+    Serial.printf("[MIC] Note %u (vel=%u) -> NoteOn\n", ev.note, ev.velocity);
+    MIDI.sendNoteOn(ev.note, ev.velocity, 1);
+  } else {
+    Serial.printf("[MIC] Note %u -> NoteOff\n", ev.note);
+    MIDI.sendNoteOff(ev.note, 0, 1);
+  }
+  lastMicTx = millis();
 }
 
 // -------------
 // WiFi handling
 // -------------
+// Diagnostic trace of the WiFi driver events (STA disconnect reasons, AP client association, DHCP)
+void onWifiEvent(WiFiEvent_t ev, WiFiEventInfo_t info) {
+  switch (ev) {
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      Serial.println("[WiFi] STA associated");
+      break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      // 201 = AP not found, 202 = auth fail, 15 = 4-way handshake timeout (bad password)
+      Serial.printf("[WiFi] STA disconnected, reason=%u\n", info.wifi_sta_disconnected.reason);
+      break;
+    case ARDUINO_EVENT_WIFI_AP_START:
+      Serial.println("[WiFi] AP started");
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+      Serial.println("[WiFi] AP: client associated");
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+      Serial.printf("[WiFi] AP: client left, reason=%u\n", info.wifi_ap_stadisconnected.reason);
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+      Serial.println("[WiFi] AP: DHCP lease assigned");
+      break;
+    default:
+      break;
+  }
+}
+
 void startAccessPoint() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(WIFI_AP_SSID);       // open AP (for configuration)
@@ -461,6 +547,7 @@ void startAccessPoint() {
 }
 
 void setupWifi() {
+  WiFi.onEvent(onWifiEvent);
   WiFi.persistent(false);          // credentials are already managed
   WiFi.setAutoReconnect(false);    // reconnection handled in the main loop
 
@@ -692,6 +779,7 @@ void sendMicStatusJson(AsyncWebServerRequest *req) {
     doc["cents"]    = serialized(String(s.lastCents, 1));
     doc["age"]      = s.lastMs ? (uint32_t)(millis() - s.lastMs) : 0;
     doc["calCount"] = micCalCount();
+    doc["dropped"]  = micDroppedEvents();
 
     JsonObject cal  = doc["cal"].to<JsonObject>();
     cal["armed"]    = s.calArmed;
@@ -798,9 +886,9 @@ void setup() {
   setupMic();         // I2S microphone
   bootAnimation();    // comet-like streak animation
 
+  setupBleMidi();     // BLE advertising
   setupWifi();        // STA (blocking, 15 s max) then possible AP fallback
   setupWebServer();
-  setupBleMidi();     // BLE advertising
 }
 
 // ---------
@@ -812,6 +900,9 @@ void loop() {
 
   // Microphone listening
   pumpMicEvents();
+
+  // BLE link check after connection
+  tuneBleLink();
 
   // WiFi messages
   maintainWifi();

@@ -42,8 +42,9 @@ without a digital piano ("Melody" mode).
 > **Replacing the BLE-MIDI library**:
 > The `BLE-MIDI` version (lathoub) shipped by the manager is not
 > compatible as-is with NimBLE as used here (the fix concerns
-> `src/hardware/BLEMIDI_ESP32_NimBLE.h`). An already-fixed version is provided
-> with the project in `libraries/BLE-MIDI.zip`. To install it:
+> `src/hardware/BLEMIDI_ESP32_NimBLE.h`). Also, this version retries briefly
+> when a BLE notification buffer is temporarily full, instead of silently
+> losing a MIDI message. To install it:
 >
 > 1. Close the Arduino IDE.
 > 2. Unzip `libraries/BLE-MIDI.zip` (from the project folder): the archive
@@ -134,16 +135,22 @@ validating the currently expected notes on each onset. Spectral analysis continu
 in the background as a watchdog: repeated mismatches or a playing hesitation
 automatically return detection to STRICT mode.
 
-Because onset detection is level-based, long-ringing notes or the sustain pedal
-may produce repeated pseudo-onsets until the sound falls below the onset floor.
-FAST-TRACK deliberately favors low latency and missed-note avoidance over strict
-wrong-note rejection.
+An onset is detected as a sharp level rise above both the recent background and
+an absolute floor. Ringing or decaying notes therefore do not retrigger detection,
+even with the sustain pedal. FAST-TRACK deliberately favors low latency and
+missed-note avoidance over strict wrong-note rejection.
+
+Each validated strike produces one fixed-length MIDI note. Fast repetitions of
+the same key are separated by a clean `NoteOff`/`NoteOn` transition, while paced
+BLE transmission, notification retries and a final safety flush prevent stuck
+notes if the wireless link is temporarily congested. After connection, the
+firmware also requests the low-latency BLE interval recommended for BLE/MIDI.
 
 ## 6. Architecture
 
 | File                | Role                                                        |
 |---------------------|-------------------------------------------------------------|
-| `PianoLights.ino`   | BLE/MIDI, note→LED mapping, WiFi STA/AP, HTTP API, NVS       |
+| `PianoLights.ino`   | BLE/MIDI and link tuning, note→LED mapping, WiFi STA/AP, HTTP API, NVS |
 | `PianoLights.h`     | Configuration page (standalone HTML/CSS/JS, in PROGMEM)      |
 | `PianoLightsMic.h`  | I2S capture, onset detection, strict/fast-track note following, Goertzel spectral watchdog and calibration |
 
