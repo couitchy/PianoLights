@@ -23,6 +23,8 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
+#include <esp_coexist.h>
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <FastLED.h>
@@ -40,14 +42,18 @@
 // ---------
 // Constants
 // ---------
-#define FW_VERSION              "1.10"
+#define FW_VERSION              "1.11"
 #define WIFI_CONNECT_TIMEOUT_MS 15000
 #define WIFI_RETRY_INTERVAL_MS  30000
+#define WIFI_AP_CHANNEL         6                   // AP-mode channel
+#define WIFI_AP_MAX_CLIENTS     4
 #define WIFI_AP_SSID            "Piano-Lights-AP"   // AP-mode SSID
 #define MDNS_HOSTNAME           "pianolights"       // access via http://pianolights.local
+#define BLE_DEVICE_NAME         "Piano-Lights"      // default name shown under Windows
+#define BLE_ADV_INTERVAL_MIN    160                 // advertising interval, units of 0.625 ms (160 = 100 ms)
+#define BLE_ADV_INTERVAL_MAX    320                 // (320 = 200 ms): leaves the radio to WiFi (coexistence)
 #define BLE_CONN_ITVL_MIN       6                   // requested connection interval, units of 1.25 ms (6 = 7.5 ms)
 #define BLE_CONN_ITVL_MAX       12                  // (12 = 15 ms), per the BLE-MIDI recommendation
-#define BLE_DEVICE_NAME         "Piano-Lights"      // default name shown under Windows
 #define BLE_TUNE_DELAY_MS       3000                // delay after connection before reading/tuning the link
 #define MIC_TX_SPACING_MS       3                   // minimum spacing between two mic-originated MIDI messages
 #define LED_MAX_COUNT           300                 // max allocated buffer
@@ -413,6 +419,16 @@ void setupBleMidi() {
   MIDI.setHandleNoteOff(onNoteOff);
   MIDI.setHandleControlChange(onControlChange);
   MIDI.begin(MIDI_CHANNEL_OMNI);
+
+  // Slow down the advertising started by BLE-MIDI: NimBLE defaults to short intervals that
+  // starve the WiFi AP under core 3.x coexistence (HTTP stalls while BLE advertises)
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  if (adv) {
+    adv->stop();
+    adv->setMinInterval(BLE_ADV_INTERVAL_MIN);
+    adv->setMaxInterval(BLE_ADV_INTERVAL_MAX);
+    adv->start();
+  }
   Serial.printf("[BLE] Device \"%s\" waiting for pairing\n", cfg.bleName);
 }
 
@@ -540,10 +556,18 @@ void onWifiEvent(WiFiEvent_t ev, WiFiEventInfo_t info) {
 }
 
 void startAccessPoint() {
+  // Fully tear down any pending STA attempt before switching modes
+  // On core 3.x a half-connecting STA interface left behind makes the AP visible (beacons) but unable to accept associations
+  WiFi.disconnect(true, true);
+  delay(100);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(WIFI_AP_SSID);       // open AP (for configuration)
+  if (!WiFi.softAP(WIFI_AP_SSID, nullptr, WIFI_AP_CHANNEL, 0, WIFI_AP_MAX_CLIENTS)) {   // open AP (for configuration)
+    Serial.println("[WiFi] softAP() failed");
+  }
   apMode = true;
-  Serial.printf("[WiFi] AP mode: SSID \"%s\", IP %s\n", WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
+  Serial.printf("[WiFi] AP mode: SSID \"%s\", channel %u, IP %s\n", WIFI_AP_SSID, WIFI_AP_CHANNEL, WiFi.softAPIP().toString().c_str());
 }
 
 void setupWifi() {
@@ -886,9 +910,15 @@ void setup() {
   setupMic();         // I2S microphone
   bootAnimation();    // comet-like streak animation
 
-  setupBleMidi();     // BLE advertising
+  // WiFi/BLE coexistence: favor WiFi (BLE-MIDI needs very little airtime)
+  // Must be set before either radio starts
+  esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+
+  setupBleMidi();     // BLE advertising, started first so that coexistence is initialized by the BT side
+  Serial.printf("[SYS] Free heap after BLE init: %u\n", ESP.getFreeHeap());
   setupWifi();        // STA (blocking, 15 s max) then possible AP fallback
   setupWebServer();
+  Serial.printf("[SYS] Free heap after setup: %u\n", ESP.getFreeHeap());
 }
 
 // ---------

@@ -24,7 +24,7 @@ without a digital piano ("Melody" mode).
 ## 1. Installation (Arduino IDE)
 
 1. Install the board support package **esp32 by Espressif Systems**
-   (Boards Manager).
+   (Boards Manager, version 3.3.10 is recommended).
 2. Install via the Library Manager:
    - **MIDI Library**        (Francois Best)
    - **BLE-MIDI**            (lathoub, but patched afterwards)
@@ -68,7 +68,17 @@ without a digital piano ("Melody" mode).
 3. After that, the page is reachable at **http://pianolights.local** (or via
    the IP shown in the serial monitor at 115200 baud).
 4. If the connection fails (wrong password, router off), AP mode
-   re-enables automatically after 15 s.
+   re-enables automatically after 15 s. The failed station connection is
+   fully stopped before the access point starts on channel 6, preventing an
+   incomplete WiFi connection from leaving the AP visible but unreachable.
+
+### WiFi and BLE coexistence
+
+WiFi and BLE share the ESP32 radio. While the device is waiting for a BLE/MIDI
+connection, aggressive BLE advertising can make the access point and embedded
+web interface unresponsive. Piano Lights therefore favors WiFi airtime and
+uses a 100–200 ms BLE advertising interval. Once connected, BLE/MIDI still
+requests its normal low-latency connection interval.
 
 ## 3. Pairing with Windows + Synthesia
 
