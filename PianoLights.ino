@@ -36,7 +36,7 @@
 #include <BLEMIDI_Transport.h>
 #include <hardware/BLEMIDI_ESP32_NimBLE.h>
 
-#include "PianoLights.h"
+#include "PianoLightsGzip.h"
 #include "PianoLightsMic.h"
 
 // ---------
@@ -854,11 +854,19 @@ void sendMicCalJson(AsyncWebServerRequest *req) {
 }
 
 void setupWebServer() {
+  // The page is served gzipped (~8 KB instead of ~30 KB): with BLE + WiFi + async server the free heap is tight
+  // A long uncompressed transfer starves the TCP buffers and stalls mid-way
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req) {
-    req->send_P(200, "text/html", INDEX_HTML);
+    Serial.printf("[HTTP] GET / from %s (heap=%u)\n", req->client()->remoteIP().toString().c_str(), ESP.getFreeHeap());
+    AsyncWebServerResponse *res = req->beginResponse(200, "text/html", INDEX_HTML_GZ, INDEX_HTML_GZ_LEN);
+    res->addHeader("Content-Encoding", "gzip");
+    req->send(res);
   });
 
-  server.on("/api/config",     HTTP_GET, sendConfigJson);
+  server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *req) {
+    Serial.printf("[HTTP] GET /api/config from %s (heap=%u)\n", req->client()->remoteIP().toString().c_str(), ESP.getFreeHeap());
+    sendConfigJson(req);
+  });
   server.on("/api/mic/status", HTTP_GET, sendMicStatusJson);
   server.on("/api/mic/cal",    HTTP_GET, sendMicCalJson);
   server.addHandler(new AsyncCallbackJsonWebHandler("/api/config",  handleConfigPost));
