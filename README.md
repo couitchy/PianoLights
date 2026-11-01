@@ -116,7 +116,7 @@ sends the notes it hears back over BLE/MIDI.
    choose the three GPIOs, then **Save preferences** and **reboot** (enabling the
    mic or changing a GPIO needs a reboot; gain and threshold apply live).
 2. In Synthesia, also select **Piano-Lights** as a MIDI **input** (Settings →
-   Music Devices), so the notes detected by the microphone reach the game.
+   Music Devices), so the notes detected by the microphone reach the interface.
 3. Adjust **gain** so the input-level meter reacts clearly to your playing without
    pinning at the top, and **threshold** to trade sensitivity against false
    positives. The detected note is shown live under the meter.
